@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>DeskMic</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      -webkit-user-select: none;
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 16px;
+      text-align: center;
+    }
+
+    .header h1 { font-size: 18px; font-weight: 600; }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px;
+      font-size: 14px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+
+    .status-dot.connecting { background: #f0a500; animation: pulse 1s infinite; }
+    .status-dot.connected { background: #4ecca3; }
+    .status-dot.recording { background: #e74c3c; animation: pulse 0.8s infinite; }
+    .status-dot.transcribing { background: #3498db; animation: pulse 0.5s infinite; }
+    .status-dot.error { background: #e74c3c; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      gap: 28px;
+    }
+
+    .mic-button {
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      border: 4px solid #4ecca3;
+      background: rgba(78, 204, 163, 0.1);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    .mic-button:active,
+    .mic-button.recording {
+      border-color: #e74c3c;
+      background: rgba(231, 76, 60, 0.2);
+      transform: scale(0.92);
+    }
+
+    .mic-button.recording {
+      animation: record-glow 1.5s infinite;
+    }
+
+    @keyframes record-glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.5); }
+      50% { box-shadow: 0 0 0 24px rgba(231, 76, 60, 0); }
+    }
+
+    .mic-button.disabled {
+      opacity: 0.3;
+      pointer-events: none;
+      border-color: #555;
+    }
+
+    .mic-icon { font-size: 64px; line-height: 1; }
+
+    .mic-hint {
+      font-size: 15px;
+      color: #999;
+      text-align: center;
+      min-height: 40px;
+    }
+
+    .transcript-area {
+      width: 100%;
+      min-height: 60px;
+      max-height: 120px;
+      background: #16213e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 15px;
+      line-height: 1.5;
+      color: #ddd;
+      overflow-y: auto;
+      text-align: center;
+    }
+
+    .transcript-area.empty {
+      color: #555;
+      font-style: italic;
+    }
+
+    .transcript-area.success {
+      border-color: #4ecca3;
+      color: #4ecca3;
+    }
+
+    .error-toast {
+      position: fixed;
+      bottom: 24px;
+      left: 16px;
+      right: 16px;
+      background: rgba(231, 76, 60, 0.9);
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      text-align: center;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s;
+      z-index: 10;
+    }
+
+    .error-toast.visible {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>DeskMic Dictation</h1>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-dot connecting" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+
+  <div class="main-area">
+    <button class="mic-button disabled" id="micBtn">
+      <span class="mic-icon">🎙</span>
+    </button>
+    <div class="mic-hint" id="micHint">Connecting to desktop...</div>
+
+    <div class="transcript-area empty" id="transcript">
+      Speak and your words will appear on your PC
+    </div>
+  </div>
+
+  <div class="error-toast" id="errorToast"></div>
+
+  <script>
+    const micBtn = document.getElementById('micBtn');
+    const micHint = document.getElementById('micHint');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const transcript = document.getElementById('transcript');
+    const errorToast = document.getElementById('errorToast');
+
+    let ws = null;
+    let isRecording = false;
+    let audioContext = null;
+    let mediaStream = null;
+    let recorder = null; // ScriptProcessorNode
+    let recordedSamples = [];
+
+    // --- WebSocket ---
+    function connect() {
+      const host = window.location.host;
+      const wsUrl = 'wss://' + host + '/ws';
+
+      setStatus('connecting', 'Connecting to desktop...');
+      micBtn.classList.add('disabled');
+
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        setStatus('connected', 'Connected to desktop');
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'status') {
+          if (msg.state === 'ready') {
+            setStatus('connected', 'Ready — tap the mic');
+            micBtn.classList.remove('disabled');
+            micHint.textContent = 'Tap to start recording';
+          } else if (msg.state === 'loading') {
+            setStatus('connecting', 'Desktop loading model...');
+          } else if (msg.state === 'transcribing') {
+            setStatus('transcribing', 'Transcribing...');
+            micHint.textContent = 'Processing your speech...';
+          }
+        } else if (msg.type === 'result') {
+          transcript.textContent = msg.text;
+          transcript.classList.remove('empty');
+          transcript.classList.add('success');
+          setTimeout(() => transcript.classList.remove('success'), 2000);
+
+          if (msg.injected) {
+            micHint.textContent = 'Inserted! Tap to record again';
+          } else {
+            micHint.textContent = 'Transcribed (injection failed). Tap to try again';
+          }
+          setStatus('connected', 'Ready — tap the mic');
+          micBtn.classList.remove('disabled');
+        } else if (msg.type === 'error') {
+          showError(msg.message);
+          setStatus('connected', 'Ready — tap the mic');
+          micBtn.classList.remove('disabled');
+          micHint.textContent = 'Tap to try again';
+        }
+      };
+
+      ws.onclose = () => {
+        setStatus('error', 'Disconnected');
+        micBtn.classList.add('disabled');
+        micHint.textContent = 'Connection lost. Reconnecting...';
+        setTimeout(connect, 2000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    // --- Status ---
+    function setStatus(state, text) {
+      statusDot.className = 'status-dot ' + state;
+      statusText.textContent = text;
+    }
+
+    function showError(msg) {
+      errorToast.textContent = msg;
+      errorToast.classList.add('visible');
+      setTimeout(() => errorToast.classList.remove('visible'), 3000);
+    }
+
+    // --- Audio capture ---
+    async function startRecording() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          }
+        });
+
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({
+          sampleRate: 16000
+        });
+
+        const source = audioContext.createMediaStreamSource(mediaStream);
+
+        // Use ScriptProcessorNode to capture raw PCM
+        // Buffer size 4096 is a good balance
+        recorder = audioContext.createScriptProcessor(4096, 1, 1);
+        recordedSamples = [];
+
+        recorder.onaudioprocess = (e) => {
+          const data = e.inputBuffer.getChannelData(0);
+          recordedSamples.push(new Float32Array(data));
+        };
+
+        source.connect(recorder);
+        recorder.connect(audioContext.destination);
+
+        isRecording = true;
+        micBtn.classList.add('recording');
+        micHint.textContent = 'Recording... tap to stop';
+        setStatus('recording', 'Recording...');
+      } catch (err) {
+        showError('Microphone access denied. Please allow microphone access.');
+      }
+    }
+
+    function stopRecording() {
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      micBtn.classList.add('disabled');
+      micHint.textContent = 'Sending audio...';
+
+      // Stop recording
+      if (recorder) {
+        recorder.disconnect();
+        recorder = null;
+      }
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(t => t.stop());
+        mediaStream = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+
+      // Merge all recorded chunks into a single Float32Array
+      let totalLength = 0;
+      for (const chunk of recordedSamples) totalLength += chunk.length;
+
+      const merged = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of recordedSamples) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Send as binary (raw f32 little-endian bytes)
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(merged.buffer);
+      } else {
+        showError('Not connected to desktop');
+        micBtn.classList.remove('disabled');
+        micHint.textContent = 'Tap to try again';
+      }
+
+      recordedSamples = [];
+    }
+
+    // --- Mic button ---
+    micBtn.addEventListener('click', () => {
+      if (micBtn.classList.contains('disabled')) return;
+
+      if (!isRecording) {
+        startRecording();
+      } else {
+        stopRecording();
+      }
+    });
+
+    // --- Keep alive ---
+    setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 15000);
+
+    // --- Go ---
+    connect();
+  </script>
+</body>
+</html>

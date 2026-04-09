@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeskMic Dictation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+
+    .header {
+      padding: 20px 24px 12px;
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .header .subtitle {
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px;
+      font-size: 13px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+      transition: background 0.3s;
+    }
+
+    .status-dot.loading { background: #f0a500; }
+    .status-dot.ready { background: #4ecca3; }
+    .status-dot.recording { background: #e74c3c; animation: pulse 1s infinite; }
+    .status-dot.transcribing { background: #3498db; animation: pulse 0.5s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      gap: 24px;
+    }
+
+    .mic-button {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 3px solid #4ecca3;
+      background: rgba(78, 204, 163, 0.1);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .mic-button:hover {
+      background: rgba(78, 204, 163, 0.2);
+      transform: scale(1.05);
+    }
+
+    .mic-button:active,
+    .mic-button.recording {
+      border-color: #e74c3c;
+      background: rgba(231, 76, 60, 0.2);
+      transform: scale(0.95);
+    }
+
+    .mic-button.recording {
+      animation: record-pulse 1.5s infinite;
+    }
+
+    @keyframes record-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+      50% { box-shadow: 0 0 0 20px rgba(231, 76, 60, 0); }
+    }
+
+    .mic-button.disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+      border-color: #555;
+    }
+
+    .mic-icon {
+      font-size: 48px;
+      line-height: 1;
+    }
+
+    .mic-hint {
+      font-size: 13px;
+      color: #888;
+      text-align: center;
+    }
+
+    .transcript-area {
+      width: 100%;
+      max-width: 360px;
+      min-height: 80px;
+      max-height: 160px;
+      background: #16213e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #ddd;
+      overflow-y: auto;
+      user-select: text;
+    }
+
+    .transcript-area.empty {
+      color: #555;
+      font-style: italic;
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+      max-width: 360px;
+    }
+
+    .action-btn {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .action-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .btn-inject {
+      background: #4ecca3;
+      color: #1a1a2e;
+    }
+
+    .btn-inject:hover:not(:disabled) { background: #3db88f; }
+
+    .btn-clear {
+      background: #333;
+      color: #ccc;
+      flex: 0.5;
+    }
+
+    .btn-clear:hover:not(:disabled) { background: #444; }
+
+    .settings-area {
+      padding: 16px 24px;
+      border-top: 1px solid #2a2a4a;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+
+    .setting-row label { color: #999; }
+
+    .setting-row select {
+      background: #16213e;
+      color: #ddd;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+
+    .error-msg {
+      background: rgba(231, 76, 60, 0.15);
+      border: 1px solid rgba(231, 76, 60, 0.3);
+      color: #e74c3c;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      width: 100%;
+      max-width: 360px;
+      display: none;
+    }
+
+    .error-msg.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>DeskMic Dictation</h1>
+    <div class="subtitle">Speak into your mic, text appears at your cursor</div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Starting...</span>
+  </div>
+
+  <div class="main-area">
+    <button class="mic-button disabled" id="micBtn" title="Hold to record">
+      <span class="mic-icon">🎙</span>
+    </button>
+    <div class="mic-hint" id="micHint">Loading model...</div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="transcript-area empty" id="transcript">
+      Transcribed text will appear here
+    </div>
+
+    <div class="action-buttons">
+      <button class="action-btn btn-inject" id="injectBtn" disabled>
+        Insert at Cursor
+      </button>
+      <button class="action-btn btn-clear" id="clearBtn" disabled>
+        Clear
+      </button>
+    </div>
+  </div>
+
+  <div class="settings-area">
+    <div class="phone-connect" id="phoneConnect" style="margin-bottom: 12px; padding: 12px; background: #16213e; border-radius: 8px; text-align: center;">
+      <div style="font-size: 12px; color: #888; margin-bottom: 6px;">Open this URL on your phone:</div>
+      <div id="serverUrl" style="font-size: 16px; font-weight: 600; color: #4ecca3; word-break: break-all;">Loading...</div>
+      <div id="phoneStatus" style="font-size: 11px; color: #666; margin-top: 4px;">No phone connected</div>
+    </div>
+    <div class="setting-row">
+      <label>Insertion mode</label>
+      <select id="injectionMode">
+        <option value="paste" selected>Clipboard paste (fast)</option>
+        <option value="type">Simulated typing (compatible)</option>
+      </select>
+    </div>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+
+    // DOM elements
+    const micBtn = document.getElementById('micBtn');
+    const micHint = document.getElementById('micHint');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const transcript = document.getElementById('transcript');
+    const injectBtn = document.getElementById('injectBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const errorMsg = document.getElementById('errorMsg');
+    const injectionMode = document.getElementById('injectionMode');
+
+    let isRecording = false;
+    let currentText = '';
+
+    // --- Startup: listen for backend event when model is ready ---
+    async function init() {
+      setStatus('loading', 'Loading whisper model...');
+
+      // Listen for the model-ready event from the Rust backend
+      await listen('model-ready', (event) => {
+        if (event.payload === 'ok') {
+          setStatus('ready', 'Ready — click the mic to record');
+          micBtn.classList.remove('disabled');
+          micHint.textContent = 'Click to start recording';
+        } else {
+          setStatus('loading', 'Model failed to load');
+          showError(event.payload);
+        }
+      });
+    }
+
+    // --- Status ---
+    function setStatus(state, text) {
+      statusDot.className = 'status-dot ' + state;
+      statusText.textContent = text;
+    }
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.classList.add('visible');
+      setTimeout(() => errorMsg.classList.remove('visible'), 5000);
+    }
+
+    // --- Recording ---
+    micBtn.addEventListener('click', async () => {
+      if (micBtn.classList.contains('disabled')) return;
+
+      if (!isRecording) {
+        // Start recording
+        try {
+          await invoke('start_recording');
+          isRecording = true;
+          micBtn.classList.add('recording');
+          micHint.textContent = 'Recording... click again to stop';
+          setStatus('recording', 'Recording...');
+          errorMsg.classList.remove('visible');
+        } catch (e) {
+          showError('Failed to start recording: ' + e);
+        }
+      } else {
+        // Stop and transcribe
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        micBtn.classList.add('disabled');
+        micHint.textContent = 'Transcribing...';
+        setStatus('transcribing', 'Transcribing...');
+
+        try {
+          const text = await invoke('stop_and_transcribe');
+          currentText = text;
+          transcript.textContent = text;
+          transcript.classList.remove('empty');
+          injectBtn.disabled = false;
+          clearBtn.disabled = false;
+          micHint.textContent = 'Click to record again';
+          setStatus('ready', 'Ready');
+        } catch (e) {
+          micHint.textContent = 'Click to start recording';
+          setStatus('ready', 'Ready');
+          if (!e.toString().includes('too short')) {
+            showError('' + e);
+          } else {
+            showError('Recording was too short — try holding longer');
+          }
+        }
+
+        micBtn.classList.remove('disabled');
+      }
+    });
+
+    // --- Inject ---
+    injectBtn.addEventListener('click', async () => {
+      if (!currentText) return;
+      injectBtn.disabled = true;
+      injectBtn.textContent = 'Switch to your app now...';
+
+      // Give user 1.5 seconds to click into their target window
+      await new Promise(r => setTimeout(r, 1500));
+
+      try {
+        await invoke('inject_text', { text: currentText });
+        injectBtn.textContent = 'Inserted!';
+        setTimeout(() => {
+          injectBtn.textContent = 'Insert at Cursor';
+          injectBtn.disabled = false;
+        }, 1500);
+      } catch (e) {
+        showError('Injection failed: ' + e);
+        injectBtn.textContent = 'Insert at Cursor';
+        injectBtn.disabled = false;
+      }
+    });
+
+    // --- Clear ---
+    clearBtn.addEventListener('click', () => {
+      currentText = '';
+      transcript.textContent = 'Transcribed text will appear here';
+      transcript.classList.add('empty');
+      injectBtn.disabled = true;
+      clearBtn.disabled = true;
+    });
+
+    // --- Settings ---
+    injectionMode.addEventListener('change', async () => {
+      await invoke('set_injection_mode', { mode: injectionMode.value });
+    });
+
+    // --- Phone connection info ---
+    const serverUrlEl = document.getElementById('serverUrl');
+    const phoneStatusEl = document.getElementById('phoneStatus');
+
+    async function loadServerUrl() {
+      try {
+        const url = await invoke('get_server_url');
+        if (url) serverUrlEl.textContent = url;
+      } catch (e) {
+        serverUrlEl.textContent = 'Not available';
+      }
+    }
+
+    async function pollPhoneStatus() {
+      try {
+        const count = await invoke('get_connected_phones');
+        if (count > 0) {
+          phoneStatusEl.textContent = count + ' phone' + (count > 1 ? 's' : '') + ' connected';
+          phoneStatusEl.style.color = '#4ecca3';
+        } else {
+          phoneStatusEl.textContent = 'No phone connected';
+          phoneStatusEl.style.color = '#666';
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    setInterval(pollPhoneStatus, 2000);
+
+    // --- Go ---
+    init();
+    loadServerUrl();
+  </script>
+</body>
+</html>

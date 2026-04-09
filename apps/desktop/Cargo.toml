@@ -1,0 +1,59 @@
+[package]
+name = "deskmic-desktop"
+version = "0.1.0"
+edition = "2024"
+default-run = "deskmic"
+
+[lib]
+name = "deskmic"
+path = "src/lib.rs"
+
+[dependencies]
+# Whisper.cpp Rust bindings for local transcription
+whisper-rs = "0.16"
+
+# Windows API access for text injection
+windows = { version = "0.61", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_Foundation",
+] }
+
+# Clipboard access (cross-platform, simpler API)
+arboard = "3"
+
+# Audio file loading
+hound = "3.5"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Microphone capture
+cpal = "0.15"
+
+# Serialization for Tauri commands
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Web server for phone companion
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+# HTTPS for phone companion (iOS requires HTTPS for microphone access)
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+
+# Tauri
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[[bin]]
+name = "deskmic"
+path = "src/main.rs"
