@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeskMic — Setup Guide</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #ddd;
+      line-height: 1.7;
+      padding: 24px;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 24px;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      font-size: 18px;
+      color: #4ecca3;
+      margin-top: 32px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #2a2a4a;
+    }
+
+    h3 {
+      font-size: 15px;
+      color: #fff;
+      margin-top: 20px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      margin-bottom: 14px;
+      color: #bbb;
+      font-size: 14px;
+    }
+
+    .lead {
+      font-size: 15px;
+      color: #999;
+      margin-bottom: 24px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    .badge.tailscale { background: #4ecca3; color: #1a1a2e; }
+    .badge.self-signed { background: #f0a500; color: #1a1a2e; }
+    .badge.loading { background: #555; color: #ccc; }
+
+    .info-box {
+      background: #16213e;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin: 16px 0;
+    }
+
+    .info-box.green { border-color: #4ecca3; }
+    .info-box.yellow { border-color: #f0a500; }
+
+    .why-box {
+      background: rgba(78, 204, 163, 0.08);
+      border-left: 3px solid #4ecca3;
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 0 8px 8px 0;
+    }
+
+    ol, ul {
+      margin: 12px 0 16px 24px;
+      font-size: 14px;
+      color: #bbb;
+    }
+
+    li {
+      margin-bottom: 8px;
+    }
+
+    li strong {
+      color: #fff;
+    }
+
+    code {
+      background: #0d1117;
+      color: #4ecca3;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: 'Consolas', 'Courier New', monospace;
+    }
+
+    .step-number {
+      display: inline-block;
+      width: 26px;
+      height: 26px;
+      background: #4ecca3;
+      color: #1a1a2e;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 26px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    .step-text {
+      flex: 1;
+      font-size: 14px;
+      color: #bbb;
+      padding-top: 2px;
+    }
+
+    .step-text strong { color: #fff; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #2a2a4a;
+      margin: 32px 0;
+    }
+
+    .option-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .option-label {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .option-label.quick { background: #f0a500; color: #1a1a2e; }
+    .option-label.best { background: #4ecca3; color: #1a1a2e; }
+
+    .faq dt {
+      font-weight: 600;
+      color: #fff;
+      font-size: 14px;
+      margin-top: 16px;
+      margin-bottom: 4px;
+    }
+
+    .faq dd {
+      color: #999;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+
+    .back-link {
+      display: inline-block;
+      color: #4ecca3;
+      text-decoration: none;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .back-link:hover { text-decoration: underline; }
+
+    .gpu-section {
+      margin-top: 32px;
+    }
+  </style>
+</head>
+<body>
+
+  <a href="/" class="back-link">&larr; Back to DeskMic</a>
+
+  <h1>DeskMic Setup Guide</h1>
+  <p class="lead">Everything you need to know to get your phone connected.</p>
+
+  <div id="certStatus">
+    <span class="badge loading">Checking...</span>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <h2>Why Does My Phone Need HTTPS?</h2>
+
+  <div class="why-box">
+    <p style="margin:0;">
+      <strong>Short answer:</strong> Your phone's browser refuses to use the microphone
+      on websites that don't use HTTPS (the padlock icon). This is a security rule baked
+      into iOS and Android&nbsp;&mdash; no app or setting can override it.
+    </p>
+  </div>
+
+  <p>
+    When you open DeskMic on your phone, it's a web page served by your PC.
+    Normally local web pages use plain HTTP, but browsers block microphone access
+    on HTTP pages to prevent malicious sites from recording you.
+  </p>
+  <p>
+    DeskMic solves this by serving the page over <strong>HTTPS</strong> with a
+    security certificate. The desktop app shows two URLs:
+  </p>
+  <ul>
+    <li><strong>LAN (port 3456)</strong> &mdash; always available, same WiFi only, shows a browser warning once</li>
+    <li><strong>Tailscale (port 3457)</strong> &mdash; only if Tailscale is set up, works from anywhere, no warnings</li>
+  </ul>
+  <p>
+    You can use either one. LAN is the quickest way to get started. Tailscale is
+    the best long-term option.
+  </p>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <h2>
+    <div class="option-header">
+      <span class="option-label quick">Quick Start</span>
+      Option A: Accept the Self-Signed Certificate
+    </div>
+  </h2>
+
+  <p>
+    DeskMic automatically creates its own certificate when it starts. Your phone's
+    browser doesn't recognize it (because it wasn't issued by a well-known authority),
+    so it shows a warning. You just need to tell your browser it's OK.
+  </p>
+
+  <h3>iPhone (Safari)</h3>
+  <div class="info-box">
+    <div class="step">
+      <span class="step-number">1</span>
+      <div class="step-text">Open <strong>Safari</strong> on your iPhone and go to the URL shown in the DeskMic desktop app (e.g. <code>https://192.168.1.100:3456</code>)</div>
+    </div>
+    <div class="step">
+      <span class="step-number">2</span>
+      <div class="step-text">You'll see <strong>"This Connection Is Not Private"</strong> &mdash; this is expected!</div>
+    </div>
+    <div class="step">
+      <span class="step-number">3</span>
+      <div class="step-text">Tap <strong>"Show Details"</strong></div>
+    </div>
+    <div class="step">
+      <span class="step-number">4</span>
+      <div class="step-text">Tap <strong>"visit this website"</strong></div>
+    </div>
+    <div class="step">
+      <span class="step-number">5</span>
+      <div class="step-text">Tap <strong>"Visit Website"</strong> to confirm</div>
+    </div>
+    <div class="step">
+      <span class="step-number">6</span>
+      <div class="step-text">The DeskMic page loads. When Safari asks to <strong>use your microphone</strong>, tap <strong>"Allow"</strong></div>
+    </div>
+    <div class="step">
+      <span class="step-number">7</span>
+      <div class="step-text">You're done! Tap the mic button and start dictating.</div>
+    </div>
+  </div>
+  <p>
+    <strong>Note:</strong> You may need to accept the warning again if you restart the
+    DeskMic app (it generates a new certificate each time it starts). This is normal.
+  </p>
+
+  <h3>Android (Chrome)</h3>
+  <div class="info-box">
+    <div class="step">
+      <span class="step-number">1</span>
+      <div class="step-text">Open <strong>Chrome</strong> and go to the URL shown in the DeskMic desktop app</div>
+    </div>
+    <div class="step">
+      <span class="step-number">2</span>
+      <div class="step-text">You'll see <strong>"Your connection is not private"</strong></div>
+    </div>
+    <div class="step">
+      <span class="step-number">3</span>
+      <div class="step-text">Tap <strong>"Advanced"</strong></div>
+    </div>
+    <div class="step">
+      <span class="step-number">4</span>
+      <div class="step-text">Tap <strong>"Proceed to [address] (unsafe)"</strong></div>
+    </div>
+    <div class="step">
+      <span class="step-number">5</span>
+      <div class="step-text">Allow microphone access when prompted. Done!</div>
+    </div>
+  </div>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <h2>
+    <div class="option-header">
+      <span class="option-label best">Recommended</span>
+      Option B: Use Tailscale (No Warnings Ever)
+    </div>
+  </h2>
+
+  <p>
+    <strong>Tailscale</strong> is a free app that creates a private, secure connection
+    between your devices. When both your PC and phone are on Tailscale, DeskMic gets a
+    real, trusted certificate &mdash; just like any normal HTTPS website. No browser
+    warnings, no extra steps on your phone.
+  </p>
+
+  <h3>What is Tailscale?</h3>
+  <p>
+    Think of it as a virtual cable between your devices. It works over any network
+    (home WiFi, mobile data, coffee shop WiFi) and everything is encrypted. It's made
+    by a well-known company and is <strong>free for personal use</strong> (up to 100 devices).
+  </p>
+
+  <h3>Setup Steps</h3>
+
+  <div class="info-box green">
+    <p style="color: #4ecca3; font-weight: 600; margin-bottom: 10px;">One-time setup (about 10 minutes)</p>
+
+    <div class="step">
+      <span class="step-number">1</span>
+      <div class="step-text">
+        <strong>Install Tailscale on your PC</strong><br>
+        Go to <code>tailscale.com</code> and download the Windows app. Sign in with your Google, Microsoft, or Apple account.
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">2</span>
+      <div class="step-text">
+        <strong>Install Tailscale on your phone</strong><br>
+        Get "Tailscale" from the App Store (iPhone) or Play Store (Android). Sign in with the <em>same account</em>.
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">3</span>
+      <div class="step-text">
+        <strong>Enable HTTPS certificates</strong><br>
+        Open a browser and go to <code>login.tailscale.com/admin/dns</code>.
+        Scroll down to <strong>"HTTPS Certificates"</strong> and click <strong>"Enable HTTPS"</strong>.
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">4</span>
+      <div class="step-text">
+        <strong>Restart DeskMic Dictation</strong><br>
+        Close and reopen the desktop app. It will detect Tailscale automatically and get a trusted certificate.
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">5</span>
+      <div class="step-text">
+        <strong>Connect your phone</strong><br>
+        Open the new URL shown in the desktop app (it will look like
+        <code>https://your-pc.your-tailnet.ts.net:3457</code>).
+        No warnings &mdash; the mic works immediately!
+      </div>
+    </div>
+  </div>
+
+  <div class="why-box">
+    <p style="margin:0;">
+      <strong>Why Tailscale is worth it:</strong>
+      Once set up, your phone connects to your PC from <em>anywhere</em> &mdash; even
+      when you're on mobile data or a different WiFi network. No port forwarding, no
+      firewall rules, and the certificate is trusted by every browser.
+    </p>
+  </div>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <h2>Troubleshooting</h2>
+
+  <dl class="faq">
+    <dt>My phone says "can't reach this page" or "connection refused"</dt>
+    <dd>
+      Make sure your phone and PC are on the <strong>same WiFi network</strong>.
+      Also check that Windows Firewall allows ports <strong>3456</strong> (LAN) and
+      <strong>3457</strong> (Tailscale). You can add inbound rules manually in
+      Windows Firewall settings.
+    </dd>
+
+    <dt>Safari shows "This Connection Is Not Private" and I can't get past it</dt>
+    <dd>
+      Tap <strong>"Show Details"</strong> at the bottom of the warning page, then
+      <strong>"visit this website"</strong>. If you don't see these options, make sure
+      you're using <strong>Safari</strong> (not Chrome on iPhone &mdash; Chrome on iOS
+      may not let you proceed past the warning). Consider setting up Tailscale for a
+      permanent fix.
+    </dd>
+
+    <dt>The page loads but the mic button doesn't work</dt>
+    <dd>
+      Check that you allowed microphone access in your browser. On iPhone:
+      <strong>Settings &gt; Safari &gt; Microphone</strong> should be set to "Ask" or "Allow".
+      Then reload the DeskMic page and tap "Allow" when prompted.
+    </dd>
+
+    <dt>Tailscale is installed but DeskMic still shows "Self-signed"</dt>
+    <dd>
+      Make sure you completed <strong>Step 3</strong> above (enable HTTPS in the
+      Tailscale admin panel). Also make sure Tailscale is <strong>connected</strong>
+      (look for the Tailscale icon in your system tray &mdash; it should say "Connected").
+      Then restart DeskMic.
+    </dd>
+
+    <dt>DeskMic says "Tailscale cert failed"</dt>
+    <dd>
+      The <code>tailscale cert</code> command may need administrator access. Try running
+      DeskMic as administrator (right-click &gt; Run as administrator), or generate the
+      certificate manually: open <strong>Command Prompt as Administrator</strong> and run:<br>
+      <code>tailscale cert --cert-file=%TEMP%\deskmic-certs\cert.pem --key-file=%TEMP%\deskmic-certs\key.pem YOUR-MACHINE.YOUR-TAILNET.ts.net</code>
+      <br>(Replace with your actual Tailscale domain shown in the DeskMic app.)
+    </dd>
+
+    <dt>Can I use this over the internet, not just my home network?</dt>
+    <dd>
+      Yes! With Tailscale, your phone can connect to your PC from anywhere &mdash;
+      different WiFi network, mobile data, even a different country. That's one of the
+      biggest advantages of Tailscale.
+    </dd>
+
+    <dt>Is the self-signed certificate safe?</dt>
+    <dd>
+      Yes. The certificate is generated locally on your PC and is only used to encrypt
+      the connection between your phone and PC on your own network. No data leaves your
+      network. The browser warning exists because your browser doesn't know who created
+      the certificate, not because anything is wrong.
+    </dd>
+  </dl>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="gpu-section">
+    <h2>GPU Acceleration</h2>
+
+    <div id="gpuStatus" class="info-box">
+      <p>Loading GPU info...</p>
+    </div>
+
+    <p>
+      DeskMic uses <strong>Whisper</strong> to convert your speech to text. By default
+      it runs on your CPU, which works fine. If you have a dedicated graphics card
+      (GPU), you can speed up transcription significantly.
+    </p>
+
+    <h3>How to Enable GPU</h3>
+    <p>
+      GPU acceleration uses <strong>Vulkan</strong>, which works with NVIDIA, AMD, and
+      Intel GPUs. To build DeskMic with GPU support:
+    </p>
+    <ol>
+      <li>
+        <strong>Install the Vulkan SDK</strong> from
+        <code>vulkan.lunarg.com</code> &mdash; run the installer and accept defaults
+      </li>
+      <li>
+        <strong>Rebuild DeskMic</strong> using the GPU build command:<br>
+        <code>build-gpu.bat</code>
+      </li>
+      <li>
+        DeskMic will automatically use your GPU if available, and fall back to
+        CPU if anything goes wrong
+      </li>
+    </ol>
+    <p>
+      <strong>Most users don't need this.</strong> The base English model is small and
+      runs fast on modern CPUs. GPU acceleration shines if you notice a delay between
+      stopping your recording and seeing the text, or if you switch to a larger model
+      for better accuracy.
+    </p>
+  </div>
+
+  <hr class="divider" />
+
+  <p style="text-align: center; color: #555; font-size: 12px; margin-top: 24px;">
+    DeskMic Dictation &mdash; speak into your phone, text appears at your cursor.
+  </p>
+
+  <script>
+    // Fetch server info to show current status
+    fetch('/api/info')
+      .then(r => r.json())
+      .then(info => {
+        // Cert status
+        const certEl = document.getElementById('certStatus');
+        if (info.cert_type === 'tailscale') {
+          certEl.innerHTML = '<span class="badge tailscale">Tailscale HTTPS Active</span>' +
+            '<p style="color:#4ecca3; font-size:14px;">Your setup is using a trusted Tailscale certificate. No browser warnings!</p>';
+        } else {
+          certEl.innerHTML = '<span class="badge self-signed">Self-Signed Certificate</span>' +
+            '<p style="color:#f0a500; font-size:14px;">Your phone will show a security warning. Follow Option A below, or set up Tailscale for a permanent fix.</p>';
+        }
+
+        // GPU status
+        const gpuEl = document.getElementById('gpuStatus');
+        if (info.gpu === true) {
+          gpuEl.innerHTML = '<p style="color:#4ecca3; margin:0;"><strong>GPU acceleration is active.</strong> Transcription is running on your graphics card.</p>';
+          gpuEl.classList.add('green');
+        } else if (info.gpu === false) {
+          gpuEl.innerHTML = '<p style="color:#999; margin:0;"><strong>Running on CPU.</strong> This is normal. See below if you want to enable GPU acceleration.</p>';
+        } else {
+          gpuEl.innerHTML = '<p style="color:#888; margin:0;">Model is still loading. Refresh to check GPU status.</p>';
+        }
+      })
+      .catch(() => {
+        document.getElementById('certStatus').innerHTML =
+          '<span class="badge loading">Could not connect to DeskMic</span>';
+      });
+  </script>
+
+</body>
+</html>

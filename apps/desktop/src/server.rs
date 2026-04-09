@@ -4,7 +4,7 @@ use crate::injection::{self, InjectionMode};
 use crate::transcription;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::WebSocketUpgrade;
-use axum::response::Html;
+use axum::response::{Html, Json};
 use axum::routing::get;
 use axum::Router;
 use axum_server::tls_rustls::RustlsConfig;
@@ -12,24 +12,52 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
+/// TLS configuration source.
+pub enum TlsSource {
+    /// Trusted Let's Encrypt cert from Tailscale (no browser warnings).
+    Tailscale { cert_pem: Vec<u8>, key_pem: Vec<u8> },
+    /// Self-signed cert for LAN IPs (browser warning once, but iOS allows bypass for IPs).
+    SelfSigned { local_ips: Vec<String> },
+}
+
 /// Shared state for the web server.
 pub struct ServerState {
     pub transcriber: Arc<Mutex<Option<transcription::Transcriber>>>,
     pub injection_mode: Arc<Mutex<String>>,
     pub connected_phones: Arc<Mutex<u32>>,
+    pub auto_space: Arc<Mutex<bool>>,
+    pub cert_type: String,
+    pub using_gpu: Arc<Mutex<Option<bool>>>,
 }
 
 /// The mobile companion HTML (embedded at compile time).
 const COMPANION_HTML: &str = include_str!("../companion/index.html");
 
-/// Start the web server on the given port with HTTPS (required for iPhone mic access).
-pub async fn run_server(state: Arc<ServerState>, port: u16, local_ips: Vec<String>) {
+/// The HTTPS setup guide HTML (embedded at compile time).
+const SETUP_HTML: &str = include_str!("../companion/setup.html");
+
+/// Start the HTTPS server on the given port. Runs until the app exits.
+pub async fn run_server(state: Arc<ServerState>, port: u16, tls: TlsSource) {
     let state_for_ws = state.clone();
+    let state_for_api = state.clone();
 
     let app = Router::new()
+        .route("/", get(|| async { Html(COMPANION_HTML) }))
+        .route("/setup", get(|| async { Html(SETUP_HTML) }))
         .route(
-            "/",
-            get(|| async { Html(COMPANION_HTML) }),
+            "/api/info",
+            get(move || {
+                let st = state_for_api.clone();
+                async move {
+                    let gpu = *st.using_gpu.lock().unwrap();
+                    Json(serde_json::json!({
+                        "cert_type": st.cert_type,
+                        "gpu": gpu,
+                        "gpu_compiled": transcription::Transcriber::gpu_compiled(),
+                        "connected_phones": *st.connected_phones.lock().unwrap(),
+                    }))
+                }
+            }),
         )
         .route(
             "/ws",
@@ -40,19 +68,28 @@ pub async fn run_server(state: Arc<ServerState>, port: u16, local_ips: Vec<Strin
         )
         .layer(CorsLayer::permissive());
 
-    // Generate self-signed TLS cert (iOS requires HTTPS for microphone access)
-    let mut sans = local_ips;
-    sans.push("localhost".to_string());
-    eprintln!("Generating self-signed cert for SANs: {sans:?}");
-
-    let certified_key = rcgen::generate_simple_self_signed(sans)
-        .expect("Failed to generate self-signed certificate");
-    let cert_pem = certified_key.cert.pem();
-    let key_pem = certified_key.key_pair.serialize_pem();
-
-    let tls_config = RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
-        .await
-        .expect("Failed to create TLS config");
+    // Build TLS config
+    let tls_config = match tls {
+        TlsSource::Tailscale { cert_pem, key_pem } => {
+            eprintln!("Using Tailscale HTTPS certificate (trusted by browsers)");
+            RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .expect("Failed to load Tailscale TLS config")
+        }
+        TlsSource::SelfSigned { local_ips } => {
+            let mut sans = local_ips;
+            sans.push("localhost".to_string());
+            eprintln!("Generating self-signed cert for SANs: {sans:?}");
+            let ck = rcgen::generate_simple_self_signed(sans)
+                .expect("Failed to generate self-signed certificate");
+            RustlsConfig::from_pem(
+                ck.cert.pem().into_bytes(),
+                ck.key_pair.serialize_pem().into_bytes(),
+            )
+            .await
+            .expect("Failed to create self-signed TLS config")
+        }
+    };
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     eprintln!("Phone companion server listening on https://0.0.0.0:{port}");
@@ -75,7 +112,9 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
     // Send a welcome message
     let _ = socket
         .send(Message::Text(
-            serde_json::json!({"type": "status", "state": "connected"}).to_string().into(),
+            serde_json::json!({"type": "status", "state": "connected"})
+                .to_string()
+                .into(),
         ))
         .await;
 
@@ -87,7 +126,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                 "type": "status",
                 "state": if model_ready { "ready" } else { "loading" }
             })
-            .to_string().into(),
+            .to_string()
+            .into(),
         ))
         .await;
 
@@ -102,23 +142,34 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
 
         match msg {
             Message::Binary(audio_data) => {
+                let duration_secs = audio_data.len() as f64 / (16000.0 * 4.0);
                 eprintln!(
                     "Received audio: {} bytes ({:.1}s at 16kHz)",
                     audio_data.len(),
-                    audio_data.len() as f64 / (16000.0 * 4.0) // f32 = 4 bytes
+                    duration_secs
                 );
 
-                // Audio is raw f32 PCM at 16kHz mono, sent as little-endian bytes
+                // Audio is raw f32 PCM at 16kHz mono
                 let samples = bytes_to_f32_samples(&audio_data);
 
+                // --- Gentle handling for too-short recordings ---
                 if samples.len() < (16000.0 * 0.3) as usize {
                     let _ = socket
                         .send(Message::Text(
                             serde_json::json!({
-                                "type": "error",
-                                "message": "Recording too short"
+                                "type": "hint",
+                                "message": "Too short \u{2014} hold to record"
                             })
-                            .to_string().into(),
+                            .to_string()
+                            .into(),
+                        ))
+                        .await;
+                    // Return to ready state
+                    let _ = socket
+                        .send(Message::Text(
+                            serde_json::json!({"type": "status", "state": "ready"})
+                                .to_string()
+                                .into(),
                         ))
                         .await;
                     continue;
@@ -128,7 +179,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                 let _ = socket
                     .send(Message::Text(
                         serde_json::json!({"type": "status", "state": "transcribing"})
-                            .to_string().into(),
+                            .to_string()
+                            .into(),
                     ))
                     .await;
 
@@ -138,16 +190,21 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                     match guard.as_ref() {
                         Some(t) => match t.transcribe(&samples) {
                             Ok(result) if !result.text.is_empty() => Ok(result.text),
-                            Ok(_) => Err("No speech detected".to_string()),
+                            Ok(_) => Err("no_speech".to_string()),
                             Err(e) => Err(format!("Transcription failed: {e}")),
                         },
-                        None => Err("Model not loaded yet".to_string()),
+                        None => Err("model_loading".to_string()),
                     }
                 };
 
                 match text {
-                    Ok(text) => {
+                    Ok(mut text) => {
                         eprintln!("Transcribed: {text}");
+
+                        // Auto-append space if enabled
+                        if *state.auto_space.lock().unwrap() {
+                            text.push(' ');
+                        }
 
                         // Inject into focused window
                         let mode_str = state.injection_mode.lock().unwrap().clone();
@@ -162,22 +219,47 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                             .send(Message::Text(
                                 serde_json::json!({
                                     "type": "result",
-                                    "text": text,
+                                    "text": text.trim(),
                                     "injected": inject_result.is_ok(),
                                     "error": inject_result.err().map(|e| e.to_string()),
                                 })
-                                .to_string().into(),
+                                .to_string()
+                                .into(),
+                            ))
+                            .await;
+                    }
+                    Err(ref err) if err == "no_speech" => {
+                        // Gentle hint, not an error
+                        let _ = socket
+                            .send(Message::Text(
+                                serde_json::json!({
+                                    "type": "hint",
+                                    "message": "No speech detected"
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await;
+                    }
+                    Err(ref err) if err == "model_loading" => {
+                        let _ = socket
+                            .send(Message::Text(
+                                serde_json::json!({"type": "status", "state": "loading"})
+                                    .to_string()
+                                    .into(),
                             ))
                             .await;
                     }
                     Err(err) => {
+                        // Actual error
                         let _ = socket
                             .send(Message::Text(
                                 serde_json::json!({
                                     "type": "error",
                                     "message": err,
                                 })
-                                .to_string().into(),
+                                .to_string()
+                                .into(),
                             ))
                             .await;
                     }
@@ -186,12 +268,13 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                 // Back to ready
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"type": "status", "state": "ready"}).to_string().into(),
+                        serde_json::json!({"type": "status", "state": "ready"})
+                            .to_string()
+                            .into(),
                     ))
                     .await;
             }
             Message::Text(text) => {
-                // Handle control messages from phone
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
                     if msg.get("type").and_then(|v| v.as_str()) == Some("ping") {
                         let _ = socket
@@ -223,9 +306,7 @@ fn bytes_to_f32_samples(data: &[u8]) -> Vec<f32> {
 pub fn get_local_ips() -> Vec<String> {
     let mut ips = Vec::new();
 
-    // Try to get IPs by binding a UDP socket (doesn't actually send anything)
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        // Connect to a public IP to determine which local interface would be used
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
                 ips.push(addr.ip().to_string());

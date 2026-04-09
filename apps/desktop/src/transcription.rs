@@ -22,18 +22,69 @@ pub struct TranscriptSegment {
 /// Holds a loaded whisper model, ready to transcribe.
 pub struct Transcriber {
     ctx: WhisperContext,
+    using_gpu: bool,
 }
 
 impl Transcriber {
     /// Load a whisper model from a .bin file.
+    ///
+    /// If compiled with the `gpu` feature, tries GPU acceleration (Vulkan) first
+    /// and falls back to CPU if the GPU isn't available or fails to initialize.
     pub fn new(model_path: &Path) -> Result<Self> {
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().context("Invalid model path")?,
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to load whisper model: {e}"))?;
+        let path_str = model_path.to_str().context("Invalid model path")?;
 
-        Ok(Self { ctx })
+        // Try GPU first if compiled with the gpu feature
+        #[cfg(feature = "gpu")]
+        {
+            eprintln!("GPU feature enabled \u{2014} attempting Vulkan GPU acceleration...");
+            let mut gpu_params = WhisperContextParameters::default();
+            gpu_params.use_gpu(true);
+
+            match WhisperContext::new_with_params(path_str, gpu_params) {
+                Ok(ctx) => {
+                    eprintln!("Whisper model loaded with GPU acceleration (Vulkan)");
+                    return Ok(Self {
+                        ctx,
+                        using_gpu: true,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("GPU initialization failed: {e}");
+                    eprintln!("Falling back to CPU...");
+                }
+            }
+        }
+
+        #[cfg(not(feature = "gpu"))]
+        {
+            eprintln!(
+                "GPU feature not enabled \u{2014} using CPU \
+                 (build with --features gpu for Vulkan acceleration)"
+            );
+        }
+
+        // CPU fallback (always works)
+        let mut cpu_params = WhisperContextParameters::default();
+        cpu_params.use_gpu(false);
+
+        let ctx = WhisperContext::new_with_params(path_str, cpu_params)
+            .map_err(|e| anyhow::anyhow!("Failed to load whisper model: {e}"))?;
+
+        eprintln!("Whisper model loaded (CPU mode)");
+        Ok(Self {
+            ctx,
+            using_gpu: false,
+        })
+    }
+
+    /// Whether the model is running on GPU.
+    pub fn is_using_gpu(&self) -> bool {
+        self.using_gpu
+    }
+
+    /// Whether the binary was compiled with GPU support.
+    pub fn gpu_compiled() -> bool {
+        cfg!(feature = "gpu")
     }
 
     /// Transcribe audio samples.
@@ -47,7 +98,7 @@ impl Transcriber {
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
-        // English language, auto-detect if needed
+        // English language
         params.set_language(Some("en"));
 
         // Enable token-level timestamps
@@ -59,8 +110,8 @@ impl Transcriber {
         params.set_print_timestamps(false);
         params.set_print_special(false);
 
-        // Single-threaded for simplicity in Phase 0
-        params.set_n_threads(4);
+        // Use 4 threads on CPU; GPU handles parallelism internally
+        params.set_n_threads(if self.using_gpu { 1 } else { 4 });
 
         state
             .full(params, samples)
@@ -76,7 +127,8 @@ impl Transcriber {
                 .get_segment(i)
                 .ok_or_else(|| anyhow::anyhow!("Failed to get segment {i}"))?;
 
-            let text = seg.to_str_lossy()
+            let text = seg
+                .to_str_lossy()
                 .map_err(|e| anyhow::anyhow!("Failed to get segment {i} text: {e}"))?
                 .to_string();
             let start = seg.start_timestamp();
@@ -137,7 +189,10 @@ pub fn load_wav_as_samples(path: &Path) -> Result<Vec<f32>> {
 
     // Convert stereo to mono by averaging channels
     if spec.channels == 2 {
-        let mono: Vec<f32> = samples.chunks(2).map(|pair| (pair[0] + pair[1]) / 2.0).collect();
+        let mono: Vec<f32> = samples
+            .chunks(2)
+            .map(|pair| (pair[0] + pair[1]) / 2.0)
+            .collect();
         Ok(mono)
     } else {
         Ok(samples)

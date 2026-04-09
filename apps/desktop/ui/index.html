@@ -182,29 +182,24 @@
 
     .btn-clear:hover:not(:disabled) { background: #444; }
 
-    .settings-area {
-      padding: 16px 24px;
-      border-top: 1px solid #2a2a4a;
-    }
-
-    .setting-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+    /* Hint message (gentle, not alarming) */
+    .hint-msg {
+      background: rgba(78, 204, 163, 0.1);
+      border: 1px solid rgba(78, 204, 163, 0.2);
+      color: #999;
+      padding: 10px 14px;
+      border-radius: 8px;
       font-size: 13px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+      display: none;
+      transition: opacity 0.3s;
     }
 
-    .setting-row label { color: #999; }
+    .hint-msg.visible { display: block; }
 
-    .setting-row select {
-      background: #16213e;
-      color: #ddd;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 6px 10px;
-      font-size: 13px;
-    }
-
+    /* Error message (red, for real errors) */
     .error-msg {
       background: rgba(231, 76, 60, 0.15);
       border: 1px solid rgba(231, 76, 60, 0.3);
@@ -218,6 +213,104 @@
     }
 
     .error-msg.visible { display: block; }
+
+    .settings-area {
+      padding: 16px 24px;
+      border-top: 1px solid #2a2a4a;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .setting-row:last-child { margin-bottom: 0; }
+
+    .setting-row label { color: #999; }
+
+    .setting-row select {
+      background: #16213e;
+      color: #ddd;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      background: #333;
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle.on { background: #4ecca3; }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: left 0.2s;
+    }
+    .toggle.on::after { left: 20px; }
+
+    .phone-connect {
+      margin-bottom: 12px;
+      padding: 12px;
+      background: #16213e;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .url-option {
+      margin: 8px 0;
+      padding: 8px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 6px;
+    }
+
+    .url-label {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 2px;
+    }
+
+    .url-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: #4ecca3;
+      word-break: break-all;
+    }
+
+    .cert-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-top: 4px;
+      vertical-align: middle;
+    }
+    .cert-badge.tailscale { background: #4ecca3; color: #1a1a2e; }
+    .cert-badge.self-signed { background: #f0a500; color: #1a1a2e; }
+
+    .cert-help {
+      font-size: 11px;
+      color: #777;
+      margin-top: 6px;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -237,6 +330,7 @@
     </button>
     <div class="mic-hint" id="micHint">Loading model...</div>
 
+    <div class="hint-msg" id="hintMsg"></div>
     <div class="error-msg" id="errorMsg"></div>
 
     <div class="transcript-area empty" id="transcript">
@@ -254,10 +348,33 @@
   </div>
 
   <div class="settings-area">
-    <div class="phone-connect" id="phoneConnect" style="margin-bottom: 12px; padding: 12px; background: #16213e; border-radius: 8px; text-align: center;">
-      <div style="font-size: 12px; color: #888; margin-bottom: 6px;">Open this URL on your phone:</div>
-      <div id="serverUrl" style="font-size: 16px; font-weight: 600; color: #4ecca3; word-break: break-all;">Loading...</div>
+    <div class="phone-connect" id="phoneConnect">
+      <div style="font-size: 12px; color: #888; margin-bottom: 6px;">
+        Open on your phone:
+      </div>
+
+      <!-- LAN URL (always shown) -->
+      <div class="url-option">
+        <div class="url-label">Same WiFi (LAN)</div>
+        <div class="url-value" id="lanUrl">Loading...</div>
+        <span class="cert-badge self-signed">Self-signed</span>
+      </div>
+
+      <!-- Tailscale URL (shown only if available) -->
+      <div class="url-option" id="tailscaleSection" style="display:none;">
+        <div class="url-label">Anywhere (Tailscale)</div>
+        <div class="url-value" id="tailscaleUrl"></div>
+        <span class="cert-badge tailscale">Trusted</span>
+      </div>
+
+      <div id="certHelp" class="cert-help"></div>
       <div id="phoneStatus" style="font-size: 11px; color: #666; margin-top: 4px;">No phone connected</div>
+      <div id="gpuStatus" style="font-size: 11px; color: #666; margin-top: 4px;"></div>
+    </div>
+
+    <div class="setting-row">
+      <label>Add space after insert</label>
+      <div class="toggle on" id="autoSpaceToggle"></div>
     </div>
     <div class="setting-row">
       <label>Insertion mode</label>
@@ -280,20 +397,21 @@
     const transcript = document.getElementById('transcript');
     const injectBtn = document.getElementById('injectBtn');
     const clearBtn = document.getElementById('clearBtn');
+    const hintMsg = document.getElementById('hintMsg');
     const errorMsg = document.getElementById('errorMsg');
     const injectionMode = document.getElementById('injectionMode');
+    const autoSpaceToggle = document.getElementById('autoSpaceToggle');
 
     let isRecording = false;
     let currentText = '';
 
-    // --- Startup: listen for backend event when model is ready ---
+    // --- Startup ---
     async function init() {
       setStatus('loading', 'Loading whisper model...');
 
-      // Listen for the model-ready event from the Rust backend
       await listen('model-ready', (event) => {
         if (event.payload === 'ok') {
-          setStatus('ready', 'Ready — click the mic to record');
+          setStatus('ready', 'Ready \u2014 click the mic to record');
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Click to start recording';
         } else {
@@ -309,6 +427,12 @@
       statusText.textContent = text;
     }
 
+    function showHint(msg) {
+      hintMsg.textContent = msg;
+      hintMsg.classList.add('visible');
+      setTimeout(() => hintMsg.classList.remove('visible'), 3000);
+    }
+
     function showError(msg) {
       errorMsg.textContent = msg;
       errorMsg.classList.add('visible');
@@ -320,19 +444,18 @@
       if (micBtn.classList.contains('disabled')) return;
 
       if (!isRecording) {
-        // Start recording
         try {
           await invoke('start_recording');
           isRecording = true;
           micBtn.classList.add('recording');
           micHint.textContent = 'Recording... click again to stop';
           setStatus('recording', 'Recording...');
+          hintMsg.classList.remove('visible');
           errorMsg.classList.remove('visible');
         } catch (e) {
           showError('Failed to start recording: ' + e);
         }
       } else {
-        // Stop and transcribe
         isRecording = false;
         micBtn.classList.remove('recording');
         micBtn.classList.add('disabled');
@@ -349,12 +472,15 @@
           micHint.textContent = 'Click to record again';
           setStatus('ready', 'Ready');
         } catch (e) {
+          const err = '' + e;
           micHint.textContent = 'Click to start recording';
           setStatus('ready', 'Ready');
-          if (!e.toString().includes('too short')) {
-            showError('' + e);
+
+          // "hint:" prefix = gentle, expected situations
+          if (err.startsWith('hint:')) {
+            showHint(err.substring(5));
           } else {
-            showError('Recording was too short — try holding longer');
+            showError(err);
           }
         }
 
@@ -368,7 +494,6 @@
       injectBtn.disabled = true;
       injectBtn.textContent = 'Switch to your app now...';
 
-      // Give user 1.5 seconds to click into their target window
       await new Promise(r => setTimeout(r, 1500));
 
       try {
@@ -399,17 +524,64 @@
       await invoke('set_injection_mode', { mode: injectionMode.value });
     });
 
-    // --- Phone connection info ---
-    const serverUrlEl = document.getElementById('serverUrl');
-    const phoneStatusEl = document.getElementById('phoneStatus');
+    autoSpaceToggle.addEventListener('click', async () => {
+      const isOn = autoSpaceToggle.classList.toggle('on');
+      await invoke('set_auto_space', { enabled: isOn });
+    });
 
-    async function loadServerUrl() {
+    // --- Phone connection info + cert status ---
+    const lanUrlEl = document.getElementById('lanUrl');
+    const tailscaleSectionEl = document.getElementById('tailscaleSection');
+    const tailscaleUrlEl = document.getElementById('tailscaleUrl');
+    const phoneStatusEl = document.getElementById('phoneStatus');
+    const certHelp = document.getElementById('certHelp');
+
+    async function loadServerInfo() {
+      // LAN URL (always available)
       try {
         const url = await invoke('get_server_url');
-        if (url) serverUrlEl.textContent = url;
+        if (url) lanUrlEl.textContent = url;
       } catch (e) {
-        serverUrlEl.textContent = 'Not available';
+        lanUrlEl.textContent = 'Not available';
       }
+
+      // Tailscale URL (shown only when available)
+      try {
+        const tsUrl = await invoke('get_tailscale_url');
+        if (tsUrl) {
+          tailscaleUrlEl.textContent = tsUrl;
+          tailscaleSectionEl.style.display = '';
+          certHelp.innerHTML = 'LAN requires accepting a security warning on your phone. Tailscale works with no warnings.';
+        } else {
+          certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
+        }
+      } catch (e) {
+        certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
+      }
+
+      // Sync auto-space toggle with backend
+      try {
+        const autoSpace = await invoke('get_auto_space');
+        if (autoSpace) {
+          autoSpaceToggle.classList.add('on');
+        } else {
+          autoSpaceToggle.classList.remove('on');
+        }
+      } catch (e) { /* ignore */ }
+
+      // GPU status
+      try {
+        const gpu = await invoke('get_gpu_status');
+        const gpuEl = document.getElementById('gpuStatus');
+        if (gpu.active === true) {
+          gpuEl.textContent = 'GPU acceleration active';
+          gpuEl.style.color = '#4ecca3';
+        } else if (gpu.compiled) {
+          gpuEl.textContent = 'GPU compiled but using CPU (no compatible GPU found)';
+        } else {
+          gpuEl.textContent = 'Running on CPU';
+        }
+      } catch (e) { /* ignore */ }
     }
 
     async function pollPhoneStatus() {
@@ -429,7 +601,7 @@
 
     // --- Go ---
     init();
-    loadServerUrl();
+    loadServerInfo();
   </script>
 </body>
 </html>

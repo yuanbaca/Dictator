@@ -8,6 +8,10 @@ default-run = "deskmic"
 name = "deskmic"
 path = "src/lib.rs"
 
+[features]
+default = []
+gpu = ["whisper-rs/vulkan"]  # Enables Vulkan GPU acceleration (needs Vulkan SDK to build)
+
 [dependencies]
 # Whisper.cpp Rust bindings for local transcription
 whisper-rs = "0.16"
