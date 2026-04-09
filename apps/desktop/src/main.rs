@@ -30,6 +30,8 @@ struct AppState {
     tailscale_url: Mutex<Option<String>>,
     /// None while loading, Some(true) for GPU, Some(false) for CPU
     using_gpu: Arc<Mutex<Option<bool>>>,
+    /// Selected audio input device name (None = system default)
+    selected_device: Arc<Mutex<Option<String>>>,
 }
 
 const LAN_PORT: u16 = 3456;
@@ -107,9 +109,10 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
 
     let stop_clone = stop_flag.clone();
     let samples_clone = samples.clone();
+    let device_name = state.selected_device.lock().unwrap().clone();
 
     let thread = std::thread::spawn(move || {
-        match audio_capture::record_until_stopped(stop_clone) {
+        match audio_capture::record_until_stopped(stop_clone, device_name) {
             Ok(recorded) => {
                 *samples_clone.lock().unwrap() = recorded;
             }
@@ -206,6 +209,21 @@ fn set_injection_mode(state: State<AppState>, mode: String) {
     *state.injection_mode.lock().unwrap() = mode;
 }
 
+#[tauri::command]
+fn list_audio_devices() -> Vec<String> {
+    audio_capture::list_input_devices()
+}
+
+#[tauri::command]
+fn get_selected_device(state: State<AppState>) -> Option<String> {
+    state.selected_device.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_selected_device(state: State<AppState>, device: Option<String>) {
+    *state.selected_device.lock().unwrap() = device;
+}
+
 // ── App entry point ─────────────────────────────────────────────────────
 
 fn main() {
@@ -215,6 +233,7 @@ fn main() {
     let auto_space: Arc<Mutex<bool>> = Arc::new(Mutex::new(true)); // on by default
     let connected_phones: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    let selected_device: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     // Determine LAN IPs for fallback
     let ips = server::get_local_ips();
@@ -285,6 +304,7 @@ fn main() {
             cert_type: Mutex::new(cert_type),
             tailscale_url: Mutex::new(tailscale_url),
             using_gpu: using_gpu.clone(),
+            selected_device: selected_device.clone(),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -295,6 +315,9 @@ fn main() {
             get_auto_space,
             set_auto_space,
             get_gpu_status,
+            list_audio_devices,
+            get_selected_device,
+            set_selected_device,
             start_recording,
             stop_and_transcribe,
             cancel_recording,

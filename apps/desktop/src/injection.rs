@@ -132,8 +132,20 @@ fn send_ctrl_v() -> Result<()> {
     Ok(())
 }
 
+/// Send a named key press (e.g. "enter", "tab", "backspace").
+pub fn send_key_by_name(name: &str) -> Result<()> {
+    let vk = match name {
+        "enter" => VIRTUAL_KEY(0x0D),   // VK_RETURN
+        "tab" => VIRTUAL_KEY(0x09),     // VK_TAB
+        "backspace" => VIRTUAL_KEY(0x08), // VK_BACK
+        "escape" => VIRTUAL_KEY(0x1B),  // VK_ESCAPE
+        other => anyhow::bail!("Unknown key: {other}"),
+    };
+    send_vk_key(vk)
+}
+
 /// Send a single virtual key press and release.
-fn send_vk_key(vk: VIRTUAL_KEY) -> Result<()> {
+pub fn send_vk_key(vk: VIRTUAL_KEY) -> Result<()> {
     let down = make_key_input(vk, false);
     let up = make_key_input(vk, true);
     let inputs = [down, up];

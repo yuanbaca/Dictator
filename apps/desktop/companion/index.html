@@ -158,6 +158,69 @@
 
     .toast.error { background: rgba(231, 76, 60, 0.9); }
     .toast.hint { background: rgba(100, 100, 120, 0.9); }
+
+    .controls-area {
+      padding: 0 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .key-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .key-btn {
+      padding: 10px 20px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #16213e;
+      color: #ddd;
+      font-size: 14px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    .key-btn:active { background: #2a2a4a; }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #16213e;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .setting-row label { color: #999; }
+
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      background: #333;
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: #4ecca3; }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: left 0.2s;
+    }
+    .toggle.on::after { left: 20px; }
   </style>
 </head>
 <body>
@@ -178,6 +241,18 @@
 
     <div class="transcript-area empty" id="transcript">
       Speak and your words will appear on your PC
+    </div>
+  </div>
+
+  <div class="controls-area">
+    <div class="key-buttons">
+      <button class="key-btn" id="enterBtn">Enter ↵</button>
+      <button class="key-btn" id="tabBtn">Tab ⇥</button>
+      <button class="key-btn" id="backspaceBtn">⌫</button>
+    </div>
+    <div class="setting-row">
+      <label>Add space after insert</label>
+      <div class="toggle on" id="autoSpaceToggle"></div>
     </div>
   </div>
 
@@ -251,6 +326,13 @@
           setStatus('connected', 'Ready — tap the mic');
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Tap to try again';
+        } else if (msg.type === 'setting' && msg.key === 'auto_space') {
+          // Sync toggle with desktop setting
+          if (msg.value) {
+            autoSpaceToggle.classList.add('on');
+          } else {
+            autoSpaceToggle.classList.remove('on');
+          }
         }
       };
 
@@ -369,6 +451,27 @@
         startRecording();
       } else {
         stopRecording();
+      }
+    });
+
+    // --- Key buttons ---
+    function sendKey(key) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'key', key }));
+      }
+    }
+
+    document.getElementById('enterBtn').addEventListener('click', () => sendKey('enter'));
+    document.getElementById('tabBtn').addEventListener('click', () => sendKey('tab'));
+    document.getElementById('backspaceBtn').addEventListener('click', () => sendKey('backspace'));
+
+    // --- Auto-space toggle ---
+    const autoSpaceToggle = document.getElementById('autoSpaceToggle');
+
+    autoSpaceToggle.addEventListener('click', () => {
+      const isOn = autoSpaceToggle.classList.toggle('on');
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'set_auto_space', enabled: isOn }));
       }
     });
 

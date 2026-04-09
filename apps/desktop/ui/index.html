@@ -373,6 +373,12 @@
     </div>
 
     <div class="setting-row">
+      <label>Microphone</label>
+      <select id="micDevice" style="max-width: 200px;">
+        <option value="">System default</option>
+      </select>
+    </div>
+    <div class="setting-row">
       <label>Add space after insert</label>
       <div class="toggle on" id="autoSpaceToggle"></div>
     </div>
@@ -520,6 +526,8 @@
     });
 
     // --- Settings ---
+    const micDevice = document.getElementById('micDevice');
+
     injectionMode.addEventListener('change', async () => {
       await invoke('set_injection_mode', { mode: injectionMode.value });
     });
@@ -528,6 +536,25 @@
       const isOn = autoSpaceToggle.classList.toggle('on');
       await invoke('set_auto_space', { enabled: isOn });
     });
+
+    micDevice.addEventListener('change', async () => {
+      const device = micDevice.value || null;
+      await invoke('set_selected_device', { device });
+    });
+
+    async function loadAudioDevices() {
+      try {
+        const devices = await invoke('list_audio_devices');
+        const selected = await invoke('get_selected_device');
+        for (const name of devices) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          if (name === selected) opt.selected = true;
+          micDevice.appendChild(opt);
+        }
+      } catch (e) { /* ignore */ }
+    }
 
     // --- Phone connection info + cert status ---
     const lanUrlEl = document.getElementById('lanUrl');
@@ -602,6 +629,7 @@
     // --- Go ---
     init();
     loadServerInfo();
+    loadAudioDevices();
   </script>
 </body>
 </html>

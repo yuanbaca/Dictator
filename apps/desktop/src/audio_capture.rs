@@ -5,13 +5,37 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Records from the default microphone until `stop` is set to true.
-/// Returns mono f32 samples at 16kHz.
-pub fn record_until_stopped(stop: Arc<AtomicBool>) -> Result<Vec<f32>> {
+/// Return a list of available input device names.
+pub fn list_input_devices() -> Vec<String> {
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .context("No microphone found! Check your audio settings.")?;
+    let mut names = Vec::new();
+    if let Ok(devices) = host.input_devices() {
+        for dev in devices {
+            if let Ok(name) = dev.name() {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Records from the microphone until `stop` is set to true.
+/// If `device_name` is Some, uses that device; otherwise uses the system default.
+/// Returns mono f32 samples at 16kHz.
+pub fn record_until_stopped(
+    stop: Arc<AtomicBool>,
+    device_name: Option<String>,
+) -> Result<Vec<f32>> {
+    let host = cpal::default_host();
+    let device = if let Some(ref name) = device_name {
+        host.input_devices()
+            .context("Failed to enumerate audio devices")?
+            .find(|d| d.name().map(|n| n == *name).unwrap_or(false))
+            .with_context(|| format!("Audio device '{}' not found", name))?
+    } else {
+        host.default_input_device()
+            .context("No microphone found! Check your audio settings.")?
+    };
 
     let config = device
         .default_input_config()

@@ -216,15 +216,36 @@
   </p>
   <p>
     DeskMic solves this by serving the page over <strong>HTTPS</strong> with a
-    security certificate. The desktop app shows two URLs:
+    security certificate. The desktop app runs two HTTPS servers and shows you
+    two URLs &mdash; pick whichever suits your situation:
   </p>
-  <ul>
-    <li><strong>LAN (port 3456)</strong> &mdash; always available, same WiFi only, shows a browser warning once</li>
-    <li><strong>Tailscale (port 3457)</strong> &mdash; only if Tailscale is set up, works from anywhere, no warnings</li>
-  </ul>
+
+  <div class="info-box">
+    <h3 style="margin-top: 0; color: #f0a500;">LAN &mdash; Port 3456 (Self-Signed Certificate)</h3>
+    <ul style="margin-bottom: 0;">
+      <li><strong>Always available</strong> &mdash; runs every time you start DeskMic, no setup needed</li>
+      <li><strong>Same WiFi only</strong> &mdash; your phone and PC must be on the same network</li>
+      <li><strong>Browser warning once</strong> &mdash; your phone will show a security warning the first time (and after each app restart). You tap through it once and you're in</li>
+      <li><strong>Uses a self-signed certificate</strong> &mdash; your PC generates its own certificate. It's perfectly safe (everything stays on your network), but your browser doesn't recognize the issuer, so it shows a warning</li>
+    </ul>
+  </div>
+
+  <div class="info-box">
+    <h3 style="margin-top: 0; color: #4ecca3;">Tailscale &mdash; Port 3457 (Trusted Certificate)</h3>
+    <ul style="margin-bottom: 0;">
+      <li><strong>Only available if Tailscale is installed and configured</strong> on both your PC and phone (free, ~10 min setup)</li>
+      <li><strong>Works from anywhere</strong> &mdash; different WiFi, mobile data, even different countries. Your phone connects to your PC through Tailscale's private network</li>
+      <li><strong>No browser warnings ever</strong> &mdash; DeskMic gets a real, trusted certificate from Let's Encrypt via Tailscale. Your browser treats it like any normal website</li>
+      <li><strong>No port forwarding or firewall changes needed</strong> for the Tailscale connection</li>
+    </ul>
+  </div>
+
   <p>
-    You can use either one. LAN is the quickest way to get started. Tailscale is
-    the best long-term option.
+    <strong>Which should I use?</strong>
+    Start with <strong>LAN</strong> &mdash; it works immediately with zero setup.
+    If you find yourself wanting to dictate from outside your home network, or you're
+    tired of tapping through the browser warning, set up Tailscale. You can always
+    use both &mdash; they run side by side.
   </p>
 
   <!-- ═══════════════════════════════════════════════ -->

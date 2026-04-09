@@ -131,6 +131,16 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
         ))
         .await;
 
+    // Send current auto-space setting so phone UI can sync
+    let auto_space_val = *state.auto_space.lock().unwrap();
+    let _ = socket
+        .send(Message::Text(
+            serde_json::json!({"type": "setting", "key": "auto_space", "value": auto_space_val})
+                .to_string()
+                .into(),
+        ))
+        .await;
+
     while let Some(msg) = socket.recv().await {
         let msg = match msg {
             Ok(m) => m,
@@ -276,12 +286,28 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
             }
             Message::Text(text) => {
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if msg.get("type").and_then(|v| v.as_str()) == Some("ping") {
-                        let _ = socket
-                            .send(Message::Text(
-                                serde_json::json!({"type": "pong"}).to_string().into(),
-                            ))
-                            .await;
+                    match msg.get("type").and_then(|v| v.as_str()) {
+                        Some("ping") => {
+                            let _ = socket
+                                .send(Message::Text(
+                                    serde_json::json!({"type": "pong"}).to_string().into(),
+                                ))
+                                .await;
+                        }
+                        Some("set_auto_space") => {
+                            if let Some(enabled) = msg.get("enabled").and_then(|v| v.as_bool()) {
+                                *state.auto_space.lock().unwrap() = enabled;
+                                eprintln!("Auto-space set to {enabled} (from phone)");
+                            }
+                        }
+                        Some("key") => {
+                            if let Some(key) = msg.get("key").and_then(|v| v.as_str()) {
+                                if let Err(e) = injection::send_key_by_name(key) {
+                                    eprintln!("Key injection failed: {e}");
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
