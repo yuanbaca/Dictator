@@ -649,6 +649,9 @@
       </div>
 
       <div id="certHelp" class="cert-help"></div>
+      <div style="margin-top:6px;">
+        <button id="refreshTailscaleBtn" style="font-size:11px; padding:3px 10px; border:1px solid var(--border); border-radius:4px; background:var(--bg-card); color:var(--text-dim); cursor:pointer;" title="Re-detect Tailscale">↻ Refresh Tailscale</button>
+      </div>
       <div class="info-text muted" id="phoneStatus">No phone connected</div>
       <div class="info-text muted" id="gpuStatus"></div>
     </div>
@@ -2064,6 +2067,19 @@
         certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
       }
 
+      // Listen for dynamic Tailscale status changes
+      listen('tailscale-changed', (event) => {
+        const tsUrl = event.payload;
+        if (tsUrl && tsUrl !== 'checking') {
+          tailscaleUrlEl.textContent = tsUrl;
+          tailscaleSectionEl.style.display = '';
+          certHelp.innerHTML = 'LAN requires accepting a security warning on your phone. Tailscale works with no warnings.';
+        } else if (!tsUrl) {
+          tailscaleSectionEl.style.display = 'none';
+          certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
+        }
+      });
+
       try {
         const autoSpace = await invoke('get_auto_space');
         if (autoSpace) {
@@ -2195,6 +2211,22 @@
     applyTheme(localStorage.getItem('dictator-theme') || 'dictator-dark');
     init();
     loadServerInfo();
+
+    // Refresh Tailscale button
+    document.getElementById('refreshTailscaleBtn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = '↻ Checking...';
+      try {
+        const msg = await invoke('refresh_tailscale');
+        showHint(msg);
+      } catch (err) {
+        showError('Tailscale: ' + err);
+      }
+      btn.disabled = false;
+      btn.textContent = '↻ Refresh Tailscale';
+    });
+
     loadAudioDevices();
     loadAutostartState();
     loadHotkey();

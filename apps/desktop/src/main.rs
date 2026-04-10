@@ -58,6 +58,23 @@ struct AppState {
     llm_error: Mutex<Option<String>>,
     /// True when no whisper model was found at startup
     no_model: Mutex<bool>,
+    /// Whether the Tailscale HTTPS server is running
+    tailscale_server_running: Arc<AtomicBool>,
+    /// Shared server state pieces needed to start Tailscale server dynamically
+    server_shared: Mutex<Option<ServerShared>>,
+}
+
+/// Shared references needed to construct a ServerState for the dynamic Tailscale server.
+struct ServerShared {
+    transcriber: Arc<Mutex<Option<transcription::Transcriber>>>,
+    formatter: Arc<Mutex<Option<llm::Formatter>>>,
+    injection_mode: Arc<Mutex<String>>,
+    connected_phones: Arc<Mutex<u32>>,
+    auto_space: Arc<Mutex<bool>>,
+    auto_format: Arc<Mutex<bool>>,
+    auto_format_type: Arc<Mutex<String>>,
+    using_gpu: Arc<Mutex<Option<bool>>>,
+    tts_trigger: std::sync::mpsc::Sender<()>,
 }
 
 const LAN_PORT: u16 = 3456;
@@ -105,6 +122,90 @@ fn get_cert_type(state: State<AppState>) -> String {
 #[tauri::command]
 fn get_tailscale_url(state: State<AppState>) -> Option<String> {
     state.tailscale_url.lock().unwrap().clone()
+}
+
+/// Reusable Tailscale refresh logic — called by both the Tauri command and the background poller.
+fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, String> {
+    let state: State<AppState> = app_handle.state();
+    let was_running = state.tailscale_server_running.load(Ordering::Relaxed);
+
+    let ts_info = tailscale::detect();
+
+    if let Some(ts) = ts_info {
+        let url = format!("https://{}:{}", ts.cert_domain, TAILSCALE_PORT);
+        *state.tailscale_url.lock().unwrap() = Some(url.clone());
+
+        if !was_running {
+            let cert_dir = std::env::temp_dir().join("dictator-certs");
+            let _ = std::fs::create_dir_all(&cert_dir);
+            let cert_path = cert_dir.join("cert.pem");
+            let key_path = cert_dir.join("key.pem");
+
+            match tailscale::generate_cert(&ts.cert_domain, &cert_path, &key_path) {
+                Ok((cert_pem, key_pem)) => {
+                    eprintln!("Tailscale cert OK for {} (dynamic start)", ts.cert_domain);
+
+                    let shared = state.server_shared.lock().unwrap();
+                    if let Some(ref ss) = *shared {
+                        let ts_state = Arc::new(server::ServerState {
+                            transcriber: ss.transcriber.clone(),
+                            formatter: ss.formatter.clone(),
+                            injection_mode: ss.injection_mode.clone(),
+                            connected_phones: ss.connected_phones.clone(),
+                            auto_space: ss.auto_space.clone(),
+                            auto_format: ss.auto_format.clone(),
+                            auto_format_type: ss.auto_format_type.clone(),
+                            cert_type: "tailscale".to_string(),
+                            using_gpu: ss.using_gpu.clone(),
+                            tts_trigger: Some(ss.tts_trigger.clone()),
+                        });
+
+                        let running_flag = state.tailscale_server_running.clone();
+                        std::thread::spawn(move || {
+                            let rt = tokio::runtime::Runtime::new()
+                                .expect("Failed to create tokio runtime for Tailscale");
+                            running_flag.store(true, Ordering::Relaxed);
+                            rt.block_on(async move {
+                                server::run_server(
+                                    ts_state,
+                                    TAILSCALE_PORT,
+                                    server::TlsSource::Tailscale { cert_pem, key_pem },
+                                )
+                                .await;
+                            });
+                            running_flag.store(false, Ordering::Relaxed);
+                        });
+
+                        eprintln!("Tailscale server started dynamically on port {TAILSCALE_PORT}");
+                    }
+
+                    let _ = app_handle.emit("tailscale-changed", url.as_str());
+                    Ok(format!("Tailscale connected: {url}"))
+                }
+                Err(e) => {
+                    eprintln!("Tailscale cert failed (dynamic): {e}");
+                    let _ = app_handle.emit("tailscale-changed", "");
+                    Err(format!("Tailscale detected but cert generation failed: {e}"))
+                }
+            }
+        } else {
+            let _ = app_handle.emit("tailscale-changed", url.as_str());
+            Ok(format!("Tailscale already connected: {url}"))
+        }
+    } else {
+        *state.tailscale_url.lock().unwrap() = None;
+        let _ = app_handle.emit("tailscale-changed", "");
+        if was_running {
+            Ok("Tailscale disconnected".to_string())
+        } else {
+            Ok("Tailscale not detected".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn refresh_tailscale(app_handle: tauri::AppHandle) -> Result<String, String> {
+    invoke_refresh_tailscale(&app_handle)
 }
 
 #[tauri::command]
@@ -1045,6 +1146,8 @@ fn main() {
             llm_status: Arc::new(Mutex::new(None)),
             llm_error: Mutex::new(None),
             no_model: Mutex::new(false),
+            tailscale_server_running: Arc::new(AtomicBool::new(false)),
+            server_shared: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -1052,6 +1155,7 @@ fn main() {
             get_connected_phones,
             get_cert_type,
             get_tailscale_url,
+            refresh_tailscale,
             get_auto_space,
             set_auto_space,
             get_gpu_status,
@@ -1207,6 +1311,57 @@ fn main() {
                                 }
                             }
                             Err(e) => eprintln!("Capture selected text failed: {e}"),
+                        }
+                    }
+                });
+            }
+
+            // Store shared server state for dynamic Tailscale server startup
+            {
+                let state: State<AppState> = app.handle().state();
+                *state.server_shared.lock().unwrap() = Some(ServerShared {
+                    transcriber: server_transcriber.clone(),
+                    formatter: server_formatter.clone(),
+                    injection_mode: server_injection.clone(),
+                    connected_phones: server_phones.clone(),
+                    auto_space: server_auto_space.clone(),
+                    auto_format: server_auto_format.clone(),
+                    auto_format_type: server_auto_format_type.clone(),
+                    using_gpu: server_gpu.clone(),
+                    tts_trigger: tts_tx.clone(),
+                });
+                if tailscale_cert.is_some() {
+                    state.tailscale_server_running.store(true, Ordering::Relaxed);
+                }
+            }
+
+            // Background Tailscale poller — checks every 60s for changes
+            {
+                let app_handle_ts = app.handle().clone();
+                std::thread::spawn(move || {
+                    // Wait 10s before first check so the app is fully loaded
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        let state: State<AppState> = app_handle_ts.state();
+                        let was_running = state.tailscale_server_running.load(Ordering::Relaxed);
+                        let had_url = state.tailscale_url.lock().unwrap().is_some();
+
+                        let ts_info = tailscale::detect();
+                        let now_available = ts_info.is_some();
+
+                        // Only act on state changes
+                        if now_available && !was_running {
+                            eprintln!("Tailscale detected — attempting dynamic server start");
+                            let _ = app_handle_ts.emit("tailscale-changed", "checking");
+                            match invoke_refresh_tailscale(&app_handle_ts) {
+                                Ok(msg) => eprintln!("Tailscale auto-refresh: {msg}"),
+                                Err(e) => eprintln!("Tailscale auto-refresh failed: {e}"),
+                            }
+                        } else if !now_available && had_url {
+                            eprintln!("Tailscale no longer detected");
+                            *state.tailscale_url.lock().unwrap() = None;
+                            let _ = app_handle_ts.emit("tailscale-changed", "");
                         }
                     }
                 });
