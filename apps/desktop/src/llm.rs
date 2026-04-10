@@ -116,7 +116,27 @@ impl Formatter {
             n_cur += 1;
         }
 
-        let result = output.trim().to_string();
+        // Strip any trailing parenthetical commentary the model may add
+        // e.g. "(Note: I rephrased...)" or "(The above has been...)"
+        let trimmed = output.trim();
+        let result = if let Some(pos) = trimmed.rfind("\n(") {
+            let after = &trimmed[pos + 1..];
+            if after.ends_with(')') || after.ends_with(").") {
+                trimmed[..pos].trim_end().to_string()
+            } else {
+                trimmed.to_string()
+            }
+        } else if trimmed.starts_with('(') && trimmed.contains(")\n") {
+            // Leading parenthetical note before the actual content
+            if let Some(pos) = trimmed.find(")\n") {
+                trimmed[pos + 2..].trim_start().to_string()
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
+
         eprintln!(
             "LLM formatted {} chars -> {} chars ({:?})",
             raw_text.len(),

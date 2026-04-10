@@ -1,4 +1,4 @@
-# DeskMic Dictation
+# Dictator
 
 Speak into your phone, text appears at your cursor on Windows.
 
@@ -8,7 +8,7 @@ Your phone acts as a wireless microphone. Audio is sent to your PC over your loc
 
 ## How It Works
 
-1. Run DeskMic on your Windows PC
+1. Run Dictator on your Windows PC
 2. Open the URL shown in the app on your phone's browser
 3. Tap the mic button on your phone and speak
 4. Text appears at your cursor on your PC
@@ -73,10 +73,10 @@ Or directly: `apps\desktop\target\release\deskmic.exe`
 
 ## Phone Setup
 
-When you open the URL on your phone, the browser needs HTTPS to access the microphone. DeskMic handles this automatically:
+When you open the URL on your phone, the browser needs HTTPS to access the microphone. Dictator handles this automatically:
 
 - **LAN mode**: Your phone will show a "not private" warning. Accept it once (iPhone: Show Details > visit this website; Android: Advanced > Proceed).
-- **Tailscale mode**: No warnings at all. Install Tailscale on both devices, enable HTTPS certs in the Tailscale admin panel, and restart DeskMic.
+- **Tailscale mode**: No warnings at all. Install Tailscale on both devices, enable HTTPS certs in the Tailscale admin panel, and restart Dictator.
 
 Full setup instructions are served at `/setup` on the companion server.
 

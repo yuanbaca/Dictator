@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DeskMic — Setup Guide</title>
+  <title>Dictator — Setup Guide</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -189,9 +189,9 @@
 </head>
 <body>
 
-  <a href="/" class="back-link">&larr; Back to DeskMic</a>
+  <a href="/" class="back-link">&larr; Back to Dictator</a>
 
-  <h1>DeskMic Setup Guide</h1>
+  <h1>Dictator Setup Guide</h1>
   <p class="lead">Everything you need to know to get your phone connected.</p>
 
   <div id="certStatus">
@@ -210,12 +210,12 @@
   </div>
 
   <p>
-    When you open DeskMic on your phone, it's a web page served by your PC.
+    When you open Dictator on your phone, it's a web page served by your PC.
     Normally local web pages use plain HTTP, but browsers block microphone access
     on HTTP pages to prevent malicious sites from recording you.
   </p>
   <p>
-    DeskMic solves this by serving the page over <strong>HTTPS</strong> with a
+    Dictator solves this by serving the page over <strong>HTTPS</strong> with a
     security certificate. The desktop app runs two HTTPS servers and shows you
     two URLs &mdash; pick whichever suits your situation:
   </p>
@@ -223,7 +223,7 @@
   <div class="info-box">
     <h3 style="margin-top: 0; color: #f0a500;">LAN &mdash; Port 3456 (Self-Signed Certificate)</h3>
     <ul style="margin-bottom: 0;">
-      <li><strong>Always available</strong> &mdash; runs every time you start DeskMic, no setup needed</li>
+      <li><strong>Always available</strong> &mdash; runs every time you start Dictator, no setup needed</li>
       <li><strong>Same WiFi only</strong> &mdash; your phone and PC must be on the same network</li>
       <li><strong>Browser warning once</strong> &mdash; your phone will show a security warning the first time (and after each app restart). You tap through it once and you're in</li>
       <li><strong>Uses a self-signed certificate</strong> &mdash; your PC generates its own certificate. It's perfectly safe (everything stays on your network), but your browser doesn't recognize the issuer, so it shows a warning</li>
@@ -235,7 +235,7 @@
     <ul style="margin-bottom: 0;">
       <li><strong>Only available if Tailscale is installed and configured</strong> on both your PC and phone (free, ~10 min setup)</li>
       <li><strong>Works from anywhere</strong> &mdash; different WiFi, mobile data, even different countries. Your phone connects to your PC through Tailscale's private network</li>
-      <li><strong>No browser warnings ever</strong> &mdash; DeskMic gets a real, trusted certificate from Let's Encrypt via Tailscale. Your browser treats it like any normal website</li>
+      <li><strong>No browser warnings ever</strong> &mdash; Dictator gets a real, trusted certificate from Let's Encrypt via Tailscale. Your browser treats it like any normal website</li>
       <li><strong>No port forwarding or firewall changes needed</strong> for the Tailscale connection</li>
     </ul>
   </div>
@@ -257,7 +257,7 @@
   </h2>
 
   <p>
-    DeskMic automatically creates its own certificate when it starts. Your phone's
+    Dictator automatically creates its own certificate when it starts. Your phone's
     browser doesn't recognize it (because it wasn't issued by a well-known authority),
     so it shows a warning. You just need to tell your browser it's OK.
   </p>
@@ -266,7 +266,7 @@
   <div class="info-box">
     <div class="step">
       <span class="step-number">1</span>
-      <div class="step-text">Open <strong>Safari</strong> on your iPhone and go to the URL shown in the DeskMic desktop app (e.g. <code>https://192.168.1.100:3456</code>)</div>
+      <div class="step-text">Open <strong>Safari</strong> on your iPhone and go to the URL shown in the Dictator desktop app (e.g. <code>https://192.168.1.100:3456</code>)</div>
     </div>
     <div class="step">
       <span class="step-number">2</span>
@@ -286,7 +286,7 @@
     </div>
     <div class="step">
       <span class="step-number">6</span>
-      <div class="step-text">The DeskMic page loads. When Safari asks to <strong>use your microphone</strong>, tap <strong>"Allow"</strong></div>
+      <div class="step-text">The Dictator page loads. When Safari asks to <strong>use your microphone</strong>, tap <strong>"Allow"</strong></div>
     </div>
     <div class="step">
       <span class="step-number">7</span>
@@ -295,14 +295,14 @@
   </div>
   <p>
     <strong>Note:</strong> You may need to accept the warning again if you restart the
-    DeskMic app (it generates a new certificate each time it starts). This is normal.
+    Dictator app (it generates a new certificate each time it starts). This is normal.
   </p>
 
   <h3>Android (Chrome)</h3>
   <div class="info-box">
     <div class="step">
       <span class="step-number">1</span>
-      <div class="step-text">Open <strong>Chrome</strong> and go to the URL shown in the DeskMic desktop app</div>
+      <div class="step-text">Open <strong>Chrome</strong> and go to the URL shown in the Dictator desktop app</div>
     </div>
     <div class="step">
       <span class="step-number">2</span>
@@ -334,7 +334,7 @@
 
   <p>
     <strong>Tailscale</strong> is a free app that creates a private, secure connection
-    between your devices. When both your PC and phone are on Tailscale, DeskMic gets a
+    between your devices. When both your PC and phone are on Tailscale, Dictator gets a
     real, trusted certificate &mdash; just like any normal HTTPS website. No browser
     warnings, no extra steps on your phone.
   </p>
@@ -379,7 +379,7 @@
     <div class="step">
       <span class="step-number">4</span>
       <div class="step-text">
-        <strong>Restart DeskMic Dictation</strong><br>
+        <strong>Restart Dictator</strong><br>
         Close and reopen the desktop app. It will detect Tailscale automatically and get a trusted certificate.
       </div>
     </div>
@@ -431,24 +431,24 @@
     <dd>
       Check that you allowed microphone access in your browser. On iPhone:
       <strong>Settings &gt; Safari &gt; Microphone</strong> should be set to "Ask" or "Allow".
-      Then reload the DeskMic page and tap "Allow" when prompted.
+      Then reload the Dictator page and tap "Allow" when prompted.
     </dd>
 
-    <dt>Tailscale is installed but DeskMic still shows "Self-signed"</dt>
+    <dt>Tailscale is installed but Dictator still shows "Self-signed"</dt>
     <dd>
       Make sure you completed <strong>Step 3</strong> above (enable HTTPS in the
       Tailscale admin panel). Also make sure Tailscale is <strong>connected</strong>
       (look for the Tailscale icon in your system tray &mdash; it should say "Connected").
-      Then restart DeskMic.
+      Then restart Dictator.
     </dd>
 
-    <dt>DeskMic says "Tailscale cert failed"</dt>
+    <dt>Dictator says "Tailscale cert failed"</dt>
     <dd>
       The <code>tailscale cert</code> command may need administrator access. Try running
-      DeskMic as administrator (right-click &gt; Run as administrator), or generate the
+      Dictator as administrator (right-click &gt; Run as administrator), or generate the
       certificate manually: open <strong>Command Prompt as Administrator</strong> and run:<br>
-      <code>tailscale cert --cert-file=%TEMP%\deskmic-certs\cert.pem --key-file=%TEMP%\deskmic-certs\key.pem YOUR-MACHINE.YOUR-TAILNET.ts.net</code>
-      <br>(Replace with your actual Tailscale domain shown in the DeskMic app.)
+      <code>tailscale cert --cert-file=%TEMP%\dictator-certs\cert.pem --key-file=%TEMP%\dictator-certs\key.pem YOUR-MACHINE.YOUR-TAILNET.ts.net</code>
+      <br>(Replace with your actual Tailscale domain shown in the Dictator app.)
     </dd>
 
     <dt>Can I use this over the internet, not just my home network?</dt>
@@ -478,7 +478,7 @@
     </div>
 
     <p>
-      DeskMic uses <strong>Whisper</strong> to convert your speech to text. By default
+      Dictator uses <strong>Whisper</strong> to convert your speech to text. By default
       it runs on your CPU, which works fine. If you have a dedicated graphics card
       (GPU), you can speed up transcription significantly.
     </p>
@@ -486,7 +486,7 @@
     <h3>How to Enable GPU</h3>
     <p>
       GPU acceleration uses <strong>Vulkan</strong>, which works with NVIDIA, AMD, and
-      Intel GPUs. To build DeskMic with GPU support:
+      Intel GPUs. To build Dictator with GPU support:
     </p>
     <ol>
       <li>
@@ -494,11 +494,11 @@
         <code>vulkan.lunarg.com</code> &mdash; run the installer and accept defaults
       </li>
       <li>
-        <strong>Rebuild DeskMic</strong> using the GPU build command:<br>
+        <strong>Rebuild Dictator</strong> using the GPU build command:<br>
         <code>build-gpu.bat</code>
       </li>
       <li>
-        DeskMic will automatically use your GPU if available, and fall back to
+        Dictator will automatically use your GPU if available, and fall back to
         CPU if anything goes wrong
       </li>
     </ol>
@@ -513,7 +513,7 @@
   <hr class="divider" />
 
   <p style="text-align: center; color: #555; font-size: 12px; margin-top: 24px;">
-    DeskMic Dictation &mdash; speak into your phone, text appears at your cursor.
+    Dictator &mdash; speak into your phone, text appears at your cursor.
   </p>
 
   <script>
@@ -544,7 +544,7 @@
       })
       .catch(() => {
         document.getElementById('certStatus').innerHTML =
-          '<span class="badge loading">Could not connect to DeskMic</span>';
+          '<span class="badge loading">Could not connect to Dictator</span>';
       });
   </script>
 

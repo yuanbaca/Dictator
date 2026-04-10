@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DeskMic Dictation</title>
+  <title>Dictator</title>
   <script>
     // Apply saved theme immediately to prevent flash of default theme
     (function() {
-      const saved = localStorage.getItem('deskmic-theme');
+      const saved = localStorage.getItem('dictator-theme');
       if (saved) document.documentElement.setAttribute('data-theme', saved);
     })();
   </script>
@@ -542,7 +542,8 @@
 </head>
 <body>
   <div class="header">
-    <h1>DeskMic Dictation</h1>
+    <img src="dictatorhat.png" alt="Dictator" style="width:48px; height:48px; margin-bottom:4px;">
+    <h1>Dictator</h1>
     <div class="subtitle">Speak into your mic, text appears at your cursor</div>
     <button class="settings-btn" id="settingsBtn" title="Settings">&#x22EE;</button>
   </div>
@@ -626,8 +627,8 @@
           <label>Theme</label>
           <select id="themeSelect">
             <optgroup label="Default">
-              <option value="deskmic-dark">DeskMic Dark</option>
-              <option value="deskmic-light">DeskMic Light</option>
+              <option value="dictator-dark">Dictator Dark</option>
+              <option value="dictator-light">Dictator Light</option>
             </optgroup>
             <optgroup label="Mint">
               <option value="mint-dark">Mint Dark</option>
@@ -694,9 +695,34 @@
           Highlight text anywhere, press hotkey to hear it read aloud
         </div>
 
+        <div id="ttsEngineGroup" class="setting-group" style="display:none;">
+          <label>Voice engine</label>
+          <select id="ttsEngineSelect">
+            <option value="sapi">Windows (built-in)</option>
+            <option value="piper">Piper (neural, better quality)</option>
+          </select>
+        </div>
+
         <div id="ttsVoiceGroup" class="setting-group" style="display:none;">
           <label>Voice</label>
           <select id="ttsVoiceSelect"></select>
+        </div>
+
+        <div id="piperSetupArea" style="display:none; margin:-6px 0 12px; padding:10px 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="piperSetupLabel"></div>
+          <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+            <div id="piperProgressFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
+          </div>
+          <div id="piperProgressStatus" style="font-size:11px; color:var(--text-muted); margin-top:4px;"></div>
+        </div>
+
+        <div id="piperVoiceGroup" style="display:none; margin-bottom:12px;">
+          <details id="piperVoiceDetails">
+            <summary style="font-size:13px; color:var(--text-dim); cursor:pointer; user-select:none; padding:4px 0;">
+              Piper voices <span id="piperVoiceSummary" style="font-size:11px; color:var(--text-muted);"></span>
+            </summary>
+            <div id="piperVoiceList" style="display:flex; flex-direction:column; gap:6px; margin-top:8px; max-height:280px; overflow-y:auto;"></div>
+          </details>
         </div>
 
         <div class="setting-group">
@@ -785,16 +811,16 @@
 
     // ── Theme Definitions ───────────────────────────────────────────────
     const THEMES = {
-      'deskmic-dark': {
-        name: 'DeskMic Dark',
+      'dictator-dark': {
+        name: 'Dictator Dark',
         bg: '#1a1a2e', bgCard: '#16213e', bgHover: '#2a2a4a',
         text: '#eeeeee', textDim: '#999999', textMuted: '#555555',
         accent: '#4ecca3', accentHover: '#3db88f', accentGlow: 'rgba(78,204,163,.15)',
         danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.2)',
         warning: '#f0a500', border: '#333333', progress: '#3498db'
       },
-      'deskmic-light': {
-        name: 'DeskMic Light',
+      'dictator-light': {
+        name: 'Dictator Light',
         bg: '#f0f2f5', bgCard: '#ffffff', bgHover: '#e4e6e9',
         text: '#1a1a2e', textDim: '#666666', textMuted: '#aaaaaa',
         accent: '#4ecca3', accentHover: '#3db88f', accentGlow: 'rgba(78,204,163,.12)',
@@ -965,7 +991,7 @@
       s.setProperty('--warning', t.warning);
       s.setProperty('--border', t.border);
       s.setProperty('--progress', t.progress);
-      localStorage.setItem('deskmic-theme', id);
+      localStorage.setItem('dictator-theme', id);
       themeSelect.value = id;
     }
 
@@ -1065,7 +1091,7 @@
     }
 
     // ── Sound Effects (Web Audio API) ──────────────────────────────────
-    let soundEnabled = localStorage.getItem('deskmic-sound') === 'true';
+    let soundEnabled = localStorage.getItem('dictator-sound') === 'true';
     let audioCtx = null;
 
     function getAudioCtx() {
@@ -1154,19 +1180,23 @@
         }
       });
 
-      // Fallback: if model-ready event fired before listener was registered,
-      // poll get_status to catch up
-      try {
-        const status = await invoke('get_status');
-        if (status === 'ready') {
-          setStatus('ready', 'Ready \u2014 click the mic to record');
-          micBtn.classList.remove('disabled');
-          micHint.textContent = 'Click to start recording';
-        } else if (status.startsWith('error:')) {
-          setStatus('loading', 'Model failed to load');
-          showError(status.slice(6));
-        }
-      } catch (e) { /* ignore */ }
+      // Fallback: poll get_status every 2s until model is ready
+      // (catches race where model-ready event fired before listener registered)
+      const pollStatus = setInterval(async () => {
+        try {
+          const status = await invoke('get_status');
+          if (status === 'ready') {
+            clearInterval(pollStatus);
+            setStatus('ready', 'Ready \u2014 click the mic to record');
+            micBtn.classList.remove('disabled');
+            micHint.textContent = 'Click to start recording';
+          } else if (status.startsWith('error:')) {
+            clearInterval(pollStatus);
+            setStatus('loading', 'Model failed to load');
+            showError(status.slice(6));
+          }
+        } catch (e) { /* ignore */ }
+      }, 2000);
     }
 
     // ── Status ──────────────────────────────────────────────────────────
@@ -1485,7 +1515,7 @@
     hotkeySelect.addEventListener('change', async () => {
       try {
         await invoke('set_hotkey', { preset: hotkeySelect.value });
-        localStorage.setItem('deskmic-hotkey', hotkeySelect.value);
+        localStorage.setItem('dictator-hotkey', hotkeySelect.value);
       } catch (e) {
         showError('Hotkey failed: ' + e);
       }
@@ -1495,7 +1525,7 @@
     injectHotkeySelect.addEventListener('change', async () => {
       try {
         await invoke('set_inject_hotkey', { preset: injectHotkeySelect.value });
-        localStorage.setItem('deskmic-inject-hotkey', injectHotkeySelect.value);
+        localStorage.setItem('dictator-inject-hotkey', injectHotkeySelect.value);
       } catch (e) {
         showError('Inject hotkey failed: ' + e);
       }
@@ -1507,20 +1537,32 @@
     // ── TTS Read Aloud ─────────────────────────────────────────────────
     const ttsHotkeySelect = document.getElementById('ttsHotkeySelect');
     const ttsHint = document.getElementById('ttsHint');
+    const ttsEngineGroup = document.getElementById('ttsEngineGroup');
+    const ttsEngineSelect = document.getElementById('ttsEngineSelect');
     const ttsVoiceGroup = document.getElementById('ttsVoiceGroup');
     const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
+    const piperVoiceGroup = document.getElementById('piperVoiceGroup');
+    const piperVoiceList = document.getElementById('piperVoiceList');
+    const piperSetupArea = document.getElementById('piperSetupArea');
+    const piperSetupLabel = document.getElementById('piperSetupLabel');
+    const piperProgressFill = document.getElementById('piperProgressFill');
+    const piperProgressStatus = document.getElementById('piperProgressStatus');
 
     function updateTtsUI() {
       const enabled = ttsHotkeySelect.value !== 'none';
+      const isPiper = ttsEngineSelect.value === 'piper';
       ttsHint.style.display = enabled ? '' : 'none';
-      ttsVoiceGroup.style.display = enabled ? '' : 'none';
-      if (enabled) loadTtsVoices();
+      ttsEngineGroup.style.display = enabled ? '' : 'none';
+      ttsVoiceGroup.style.display = enabled && !isPiper ? '' : 'none';
+      piperVoiceGroup.style.display = enabled && isPiper ? '' : 'none';
+      if (enabled && !isPiper) loadSapiVoices();
+      if (enabled && isPiper) loadPiperVoices();
     }
 
-    async function loadTtsVoices() {
+    async function loadSapiVoices() {
       try {
         const voices = await invoke('list_tts_voices');
-        const saved = localStorage.getItem('deskmic-tts-voice') || '';
+        const saved = localStorage.getItem('dictator-tts-voice') || '';
         ttsVoiceSelect.innerHTML = '';
         for (const v of voices) {
           const opt = document.createElement('option');
@@ -1532,20 +1574,160 @@
       } catch (e) { /* ignore */ }
     }
 
+    const piperVoiceSummary = document.getElementById('piperVoiceSummary');
+
+    async function loadPiperVoices() {
+      try {
+        const voices = await invoke('list_piper_voices');
+        const saved = localStorage.getItem('dictator-piper-voice') || '';
+        piperVoiceList.innerHTML = '';
+        const activeVoice = voices.find(v => v.id === saved);
+        const installedCount = voices.filter(v => v.installed).length;
+        piperVoiceSummary.textContent = activeVoice
+          ? '— ' + activeVoice.name + ' (' + installedCount + '/' + voices.length + ' installed)'
+          : '(' + installedCount + '/' + voices.length + ' installed)';
+        for (const v of voices) {
+          const active = v.id === saved;
+          const card = document.createElement('div');
+          card.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg-card); border:1px solid ' + (active ? 'var(--accent)' : 'var(--border)') + '; border-radius:8px;';
+          const info = document.createElement('div');
+          info.style.cssText = 'flex:1; min-width:0;';
+          info.innerHTML = '<div style="font-size:13px; font-weight:500;">' + v.name + '</div>'
+            + '<div style="font-size:11px; color:var(--text-muted);">' + v.size_mb + ' MB</div>';
+          card.appendChild(info);
+          if (v.installed) {
+            const badge = document.createElement('span');
+            badge.textContent = active ? 'Active' : 'Installed';
+            badge.style.cssText = 'font-size:10px; padding:2px 8px; border-radius:10px; white-space:nowrap; background:' + (active ? 'var(--accent)' : 'rgba(78,204,163,0.15)') + '; color:' + (active ? '#000' : 'var(--accent)') + ';';
+            card.appendChild(badge);
+            if (!active) {
+              const useBtn = document.createElement('button');
+              useBtn.textContent = 'Use';
+              useBtn.style.cssText = 'font-size:11px; padding:3px 10px; border:1px solid var(--accent); background:transparent; color:var(--accent); border-radius:6px; cursor:pointer;';
+              useBtn.onclick = async () => {
+                localStorage.setItem('dictator-piper-voice', v.id);
+                await invoke('set_piper_voice', { voiceId: v.id });
+                await loadPiperVoices();
+              };
+              card.appendChild(useBtn);
+            }
+            const delBtn = document.createElement('button');
+            delBtn.textContent = 'Delete';
+            delBtn.style.cssText = 'font-size:11px; padding:3px 10px; border:1px solid var(--danger); background:transparent; color:var(--danger); border-radius:6px; cursor:pointer;';
+            delBtn.onclick = async () => {
+              if (!confirm('Delete voice "' + v.name + '"?')) return;
+              try {
+                await invoke('delete_piper_voice', { voiceId: v.id });
+                if (active) localStorage.removeItem('dictator-piper-voice');
+                await loadPiperVoices();
+              } catch (e) { showError('Delete failed: ' + e); }
+            };
+            card.appendChild(delBtn);
+          } else {
+            const dlBtn = document.createElement('button');
+            dlBtn.textContent = 'Download';
+            dlBtn.style.cssText = 'font-size:11px; padding:3px 10px; border:1px solid var(--accent); background:transparent; color:var(--accent); border-radius:6px; cursor:pointer; white-space:nowrap;';
+            dlBtn.onclick = async () => {
+              await ensurePiperReady(v.id);
+              localStorage.setItem('dictator-piper-voice', v.id);
+              await invoke('set_piper_voice', { voiceId: v.id });
+              await loadPiperVoices();
+            };
+            card.appendChild(dlBtn);
+          }
+          piperVoiceList.appendChild(card);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function ensurePiperReady(voiceId) {
+      // Check piper.exe
+      const hasPiper = await invoke('has_piper');
+      if (!hasPiper) {
+        piperSetupArea.style.display = '';
+        piperSetupLabel.textContent = 'Downloading Piper engine...';
+        piperProgressFill.style.width = '0%';
+        piperProgressStatus.textContent = 'Starting...';
+        try {
+          await invoke('download_piper');
+          piperSetupLabel.textContent = 'Piper engine ready!';
+          piperProgressFill.style.width = '100%';
+          piperProgressStatus.textContent = '';
+        } catch (e) {
+          piperSetupLabel.textContent = 'Download failed';
+          piperProgressStatus.textContent = '' + e;
+          return false;
+        }
+      }
+
+      // Check voice model
+      const voices = await invoke('list_piper_voices');
+      const voice = voices.find(v => v.id === voiceId);
+      if (voice && !voice.installed) {
+        piperSetupArea.style.display = '';
+        piperSetupLabel.textContent = 'Downloading voice: ' + voice.name + '...';
+        piperProgressFill.style.width = '0%';
+        piperProgressStatus.textContent = 'Starting...';
+        try {
+          await invoke('download_piper_voice', { voiceId });
+          piperSetupLabel.textContent = 'Voice ready!';
+          piperProgressFill.style.width = '100%';
+          piperProgressStatus.textContent = '';
+          setTimeout(() => { piperSetupArea.style.display = 'none'; }, 2000);
+        } catch (e) {
+          piperSetupLabel.textContent = 'Download failed';
+          piperProgressStatus.textContent = '' + e;
+          return false;
+        }
+      } else {
+        piperSetupArea.style.display = 'none';
+      }
+      return true;
+    }
+
+    listen('piper-download-progress', (event) => {
+      const { downloaded, total, percent } = event.payload;
+      piperProgressFill.style.width = percent + '%';
+      const mb = (downloaded / 1_000_000).toFixed(0);
+      const totalMb = (total / 1_000_000).toFixed(0);
+      piperProgressStatus.textContent = mb + ' / ' + totalMb + ' MB (' + percent + '%)';
+    });
+
+    listen('piper-voice-download-progress', (event) => {
+      const { downloaded, total, percent } = event.payload;
+      piperProgressFill.style.width = percent + '%';
+      const mb = (downloaded / 1_000_000).toFixed(0);
+      const totalMb = (total / 1_000_000).toFixed(0);
+      piperProgressStatus.textContent = mb + ' / ' + totalMb + ' MB (' + percent + '%)';
+    });
+
     ttsHotkeySelect.addEventListener('change', async () => {
       try {
         await invoke('set_tts_hotkey', { preset: ttsHotkeySelect.value });
-        localStorage.setItem('deskmic-tts-hotkey', ttsHotkeySelect.value);
+        localStorage.setItem('dictator-tts-hotkey', ttsHotkeySelect.value);
         updateTtsUI();
       } catch (e) {
         showError('Read aloud hotkey failed: ' + e);
       }
     });
 
+    ttsEngineSelect.addEventListener('change', async () => {
+      const engine = ttsEngineSelect.value;
+      localStorage.setItem('dictator-tts-engine', engine);
+      await invoke('set_tts_engine', { engine });
+      updateTtsUI();
+
+      if (engine === 'piper') {
+        const voiceId = localStorage.getItem('dictator-piper-voice') || 'amy-medium';
+        await ensurePiperReady(voiceId);
+        await invoke('set_piper_voice', { voiceId });
+      }
+    });
+
     ttsVoiceSelect.addEventListener('change', async () => {
       try {
         await invoke('set_tts_voice', { name: ttsVoiceSelect.value });
-        localStorage.setItem('deskmic-tts-voice', ttsVoiceSelect.value);
+        localStorage.setItem('dictator-tts-voice', ttsVoiceSelect.value);
       } catch (e) { /* ignore */ }
     });
 
@@ -1562,11 +1744,11 @@
     if (soundEnabled) soundToggle.classList.add('on');
     soundToggle.addEventListener('click', () => {
       soundEnabled = soundToggle.classList.toggle('on');
-      localStorage.setItem('deskmic-sound', soundEnabled);
+      localStorage.setItem('dictator-sound', soundEnabled);
     });
 
     // ── Auto-format toggle ──────────────────────────────────────────────
-    let autoFormatEnabled = localStorage.getItem('deskmic-autoformat') === 'true';
+    let autoFormatEnabled = localStorage.getItem('dictator-autoformat') === 'true';
     let modelDownloading = false;
     const autoFormatToggle = document.getElementById('autoFormatToggle');
     const autoFormatHint = document.getElementById('autoFormatHint');
@@ -1622,13 +1804,13 @@
     });
 
     if (autoFormatEnabled) autoFormatToggle.classList.add('on');
-    const savedAutoFormatType = localStorage.getItem('deskmic-autoformat-type');
+    const savedAutoFormatType = localStorage.getItem('dictator-autoformat-type');
     if (savedAutoFormatType) autoFormatType.value = savedAutoFormatType;
     updateAutoFormatUI();
 
     autoFormatToggle.addEventListener('click', async () => {
       autoFormatEnabled = autoFormatToggle.classList.toggle('on');
-      localStorage.setItem('deskmic-autoformat', autoFormatEnabled);
+      localStorage.setItem('dictator-autoformat', autoFormatEnabled);
       updateAutoFormatUI();
 
       if (autoFormatEnabled) {
@@ -1637,7 +1819,7 @@
     });
 
     autoFormatType.addEventListener('change', () => {
-      localStorage.setItem('deskmic-autoformat-type', autoFormatType.value);
+      localStorage.setItem('dictator-autoformat-type', autoFormatType.value);
     });
 
     const autostartToggle = document.getElementById('autostartToggle');
@@ -1739,12 +1921,12 @@
     // ── Version check toggle ───────────────────────────────────────────
     const updateCheckToggle = document.getElementById('updateCheckToggle');
     const versionInfo = document.getElementById('versionInfo');
-    let updateCheckEnabled = localStorage.getItem('deskmic-updatecheck') === 'true';
+    let updateCheckEnabled = localStorage.getItem('dictator-updatecheck') === 'true';
     if (updateCheckEnabled) updateCheckToggle.classList.add('on');
 
     updateCheckToggle.addEventListener('click', () => {
       updateCheckEnabled = updateCheckToggle.classList.toggle('on');
-      localStorage.setItem('deskmic-updatecheck', updateCheckEnabled);
+      localStorage.setItem('dictator-updatecheck', updateCheckEnabled);
       if (updateCheckEnabled) {
         checkForUpdates();
       } else {
@@ -1771,13 +1953,13 @@
 
     // ── Init ────────────────────────────────────────────────────────────
     async function loadHotkey() {
-      const saved = localStorage.getItem('deskmic-hotkey') || 'Ctrl+Shift+Space';
+      const saved = localStorage.getItem('dictator-hotkey') || 'Ctrl+Shift+Space';
       hotkeySelect.value = saved;
       try {
         await invoke('set_hotkey', { preset: saved });
       } catch (e) { /* ignore */ }
 
-      const savedInject = localStorage.getItem('deskmic-inject-hotkey') || 'none';
+      const savedInject = localStorage.getItem('dictator-inject-hotkey') || 'none';
       injectHotkeySelect.value = savedInject;
       if (savedInject !== 'none') {
         try {
@@ -1785,22 +1967,38 @@
         } catch (e) { /* ignore */ }
       }
 
-      const savedTts = localStorage.getItem('deskmic-tts-hotkey') || 'none';
+      const savedTts = localStorage.getItem('dictator-tts-hotkey') || 'none';
       ttsHotkeySelect.value = savedTts;
-      updateTtsUI();
       if (savedTts !== 'none') {
         try {
           await invoke('set_tts_hotkey', { preset: savedTts });
         } catch (e) { /* ignore */ }
 
-        // Restore saved voice
-        const savedVoice = localStorage.getItem('deskmic-tts-voice');
-        if (savedVoice) {
+        // Restore engine choice
+        const savedEngine = localStorage.getItem('dictator-tts-engine') || 'sapi';
+        ttsEngineSelect.value = savedEngine;
+        try {
+          await invoke('set_tts_engine', { engine: savedEngine });
+        } catch (e) { /* ignore */ }
+
+        if (savedEngine === 'piper') {
+          // Restore piper voice
+          const savedPiperVoice = localStorage.getItem('dictator-piper-voice') || 'amy-medium';
+          await ensurePiperReady(savedPiperVoice);
           try {
-            await invoke('set_tts_voice', { name: savedVoice });
+            await invoke('set_piper_voice', { voiceId: savedPiperVoice });
           } catch (e) { /* ignore */ }
+        } else {
+          // Restore SAPI voice
+          const savedVoice = localStorage.getItem('dictator-tts-voice');
+          if (savedVoice) {
+            try {
+              await invoke('set_tts_voice', { name: savedVoice });
+            } catch (e) { /* ignore */ }
+          }
         }
       }
+      updateTtsUI();
     }
 
     async function loadAutostartState() {
@@ -1810,7 +2008,7 @@
       } catch (e) { /* ignore */ }
     }
 
-    applyTheme(localStorage.getItem('deskmic-theme') || 'deskmic-dark');
+    applyTheme(localStorage.getItem('dictator-theme') || 'dictator-dark');
     init();
     loadServerInfo();
     loadAudioDevices();

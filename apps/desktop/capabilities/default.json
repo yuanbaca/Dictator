@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for DeskMic",
+  "description": "Default capabilities for Dictator",
   "windows": ["main"],
   "permissions": [
     "core:default",

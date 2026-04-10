@@ -62,29 +62,34 @@ impl FormatType {
             FormatType::CleanUp => {
                 "Rewrite the following dictated text with correct grammar, punctuation, \
                  and capitalization. Remove filler words (um, uh, like, you know). \
-                 Keep the same meaning, tone, and length. Do not add information."
+                 Keep the same meaning, tone, and length. Do not add information. \
+                 Output ONLY the rewritten text. No explanations, no notes, no commentary."
             }
             FormatType::Email => {
                 "Rewrite the following dictated text as a professional email. \
                  Include a clear subject line on the first line as 'Subject: ...', \
                  then a greeting, organized body, and sign-off. \
                  Keep all original details. Fix grammar and punctuation. \
-                 Do not add information that wasn't in the original."
+                 Do not add information that wasn't in the original. \
+                 Output ONLY the email. No explanations, no notes, no commentary."
             }
             FormatType::MeetingNotes => {
                 "Rewrite the following dictated text as structured meeting notes. \
                  Use bullet points. Extract key decisions, action items, and discussion points. \
-                 Group related items together. Keep all details from the original."
+                 Group related items together. Keep all details from the original. \
+                 Output ONLY the meeting notes. No explanations, no notes, no commentary."
             }
             FormatType::Documentation => {
                 "Rewrite the following dictated text as clear documentation. \
                  Use sections with headers where appropriate. Use clear, concise \
-                 technical language. Organize logically. Keep all information from the original."
+                 technical language. Organize logically. Keep all information from the original. \
+                 Output ONLY the documentation. No explanations, no notes, no commentary."
             }
             FormatType::Message => {
                 "Rewrite the following dictated text as a casual chat message. \
                  Fix grammar and remove filler words, but keep it conversational and natural. \
-                 Keep it brief. Do not add information."
+                 Keep it brief. Do not add information. \
+                 Output ONLY the message. No explanations, no notes, no commentary."
             }
         }
     }

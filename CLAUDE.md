@@ -1,4 +1,4 @@
-# DeskMic Dictation - Development Guide
+# Dictator - Development Guide
 
 ## What This Project Is
 

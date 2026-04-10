@@ -1,11 +1,11 @@
 [package]
-name = "deskmic-desktop"
+name = "dictator"
 version = "0.1.0"
 edition = "2024"
-default-run = "deskmic"
+default-run = "dictator"
 
 [lib]
-name = "deskmic"
+name = "dictator"
 path = "src/lib.rs"
 
 [features]
@@ -63,6 +63,12 @@ rcgen = "0.13"
 # Text-to-speech (Windows SAPI)
 tts = "0.26"
 
+# Audio playback (for Piper TTS output)
+rodio = "0.20"
+
+# Zip extraction (for piper.exe download)
+zip = "2"
+
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
@@ -71,5 +77,5 @@ tauri-plugin-global-shortcut = "2"
 tauri-build = { version = "2", features = [] }
 
 [[bin]]
-name = "deskmic"
+name = "dictator"
 path = "src/main.rs"

@@ -1,14 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use deskmic::audio_capture;
-use deskmic::injection::{self, InjectionMode};
-use deskmic::llm;
-use deskmic::model_manager;
-use deskmic::server;
-use deskmic::tailscale;
-use deskmic::templates::FormatType;
-use deskmic::transcription;
-use deskmic::tts;
+use dictator::audio_capture;
+use dictator::injection::{self, InjectionMode};
+use dictator::llm;
+use dictator::model_manager;
+use dictator::server;
+use dictator::tailscale;
+use dictator::templates::FormatType;
+use dictator::transcription;
+use dictator::tts;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,8 +45,12 @@ struct AppState {
     inject_hotkey: Mutex<String>,
     /// Read-aloud hotkey preset
     tts_hotkey: Mutex<String>,
-    /// TTS speaker (lazy-loaded on first speak)
-    speaker: Arc<Mutex<Option<tts::Speaker>>>,
+    /// SAPI TTS speaker (lazy-loaded on first speak)
+    speaker: Arc<Mutex<Option<tts::SapiSpeaker>>>,
+    /// Piper TTS speaker (neural voices)
+    piper: Arc<tts::PiperSpeaker>,
+    /// TTS engine: "sapi" or "piper"
+    tts_engine: Mutex<String>,
     /// LLM formatter (lazy-loaded on first format request)
     formatter: Arc<Mutex<Option<llm::Formatter>>>,
     /// LLM status: None = not loaded, Some(true) = loaded, Some(false) = failed
@@ -256,7 +260,7 @@ fn get_autostart() -> bool {
             "query",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
             "/v",
-            "DeskMic",
+            "Dictator",
         ])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output();
@@ -406,7 +410,7 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                 "/v",
-                "DeskMic",
+                "Dictator",
                 "/t",
                 "REG_SZ",
                 "/d",
@@ -425,7 +429,7 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                 "/v",
-                "DeskMic",
+                "Dictator",
                 "/f",
             ])
             .creation_flags(0x08000000)
@@ -557,28 +561,46 @@ fn get_models_dir() -> String {
 
 #[tauri::command]
 fn speak_text(state: State<AppState>, text: String) -> Result<(), String> {
-    let mut speaker_guard = state.speaker.lock().unwrap();
-    if speaker_guard.is_none() {
-        *speaker_guard = Some(tts::Speaker::new()?);
+    let engine = state.tts_engine.lock().unwrap().clone();
+    if engine == "piper" {
+        state.piper.speak(&text)
+    } else {
+        let mut guard = state.speaker.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(tts::SapiSpeaker::new()?);
+        }
+        guard.as_ref().unwrap().speak(&text)
     }
-    speaker_guard.as_ref().unwrap().speak(&text)
 }
 
 #[tauri::command]
 fn stop_speaking(state: State<AppState>) -> Result<(), String> {
-    let speaker_guard = state.speaker.lock().unwrap();
-    if let Some(speaker) = speaker_guard.as_ref() {
-        speaker.stop()?;
+    let engine = state.tts_engine.lock().unwrap().clone();
+    if engine == "piper" {
+        state.piper.stop();
+        Ok(())
+    } else {
+        let guard = state.speaker.lock().unwrap();
+        if let Some(speaker) = guard.as_ref() {
+            speaker.stop()?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[tauri::command]
 fn read_selected_text(state: State<AppState>) -> Result<(), String> {
-    // Toggle: if already speaking, stop instead of reading new text
-    {
-        let speaker_guard = state.speaker.lock().unwrap();
-        if let Some(speaker) = speaker_guard.as_ref() {
+    let engine = state.tts_engine.lock().unwrap().clone();
+
+    // Toggle: if already speaking, stop
+    if engine == "piper" {
+        if state.piper.is_speaking() {
+            state.piper.stop();
+            return Ok(());
+        }
+    } else {
+        let guard = state.speaker.lock().unwrap();
+        if let Some(speaker) = guard.as_ref() {
             if speaker.is_speaking() {
                 return speaker.stop();
             }
@@ -586,18 +608,23 @@ fn read_selected_text(state: State<AppState>) -> Result<(), String> {
     }
 
     let text = tts::capture_selected_text()?;
-    let mut speaker_guard = state.speaker.lock().unwrap();
-    if speaker_guard.is_none() {
-        *speaker_guard = Some(tts::Speaker::new()?);
+
+    if engine == "piper" {
+        state.piper.speak(&text)
+    } else {
+        let mut guard = state.speaker.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(tts::SapiSpeaker::new()?);
+        }
+        guard.as_ref().unwrap().speak(&text)
     }
-    speaker_guard.as_ref().unwrap().speak(&text)
 }
 
 #[tauri::command]
 fn list_tts_voices(state: State<AppState>) -> Result<Vec<String>, String> {
     let mut speaker_guard = state.speaker.lock().unwrap();
     if speaker_guard.is_none() {
-        *speaker_guard = Some(tts::Speaker::new()?);
+        *speaker_guard = Some(tts::SapiSpeaker::new()?);
     }
     Ok(speaker_guard.as_ref().unwrap().list_voices())
 }
@@ -606,7 +633,7 @@ fn list_tts_voices(state: State<AppState>) -> Result<Vec<String>, String> {
 fn set_tts_voice(state: State<AppState>, name: String) -> Result<(), String> {
     let mut speaker_guard = state.speaker.lock().unwrap();
     if speaker_guard.is_none() {
-        *speaker_guard = Some(tts::Speaker::new()?);
+        *speaker_guard = Some(tts::SapiSpeaker::new()?);
     }
     speaker_guard.as_ref().unwrap().set_voice(&name)
 }
@@ -615,9 +642,102 @@ fn set_tts_voice(state: State<AppState>, name: String) -> Result<(), String> {
 fn set_tts_rate(state: State<AppState>, rate: f32) -> Result<(), String> {
     let mut speaker_guard = state.speaker.lock().unwrap();
     if speaker_guard.is_none() {
-        *speaker_guard = Some(tts::Speaker::new()?);
+        *speaker_guard = Some(tts::SapiSpeaker::new()?);
     }
     speaker_guard.as_ref().unwrap().set_rate(rate)
+}
+
+// ── Piper TTS commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_tts_engine(state: State<AppState>) -> String {
+    state.tts_engine.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_tts_engine(state: State<AppState>, engine: String) -> Result<(), String> {
+    if engine != "sapi" && engine != "piper" {
+        return Err(format!("Unknown engine: {engine}"));
+    }
+    *state.tts_engine.lock().unwrap() = engine;
+    Ok(())
+}
+
+#[tauri::command]
+fn has_piper(state: State<AppState>) -> bool {
+    state.piper.has_piper_exe()
+}
+
+#[tauri::command]
+fn list_piper_voices(state: State<AppState>) -> Vec<serde_json::Value> {
+    tts::PIPER_VOICES
+        .iter()
+        .map(|v| {
+            serde_json::json!({
+                "id": v.id,
+                "name": v.name,
+                "size_mb": v.size_bytes / 1_000_000,
+                "installed": state.piper.has_voice(v.id),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn set_piper_voice(state: State<AppState>, voice_id: String) {
+    state.piper.set_voice(&voice_id);
+}
+
+#[tauri::command]
+async fn download_piper(
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let state: State<AppState> = app_handle.state();
+    let piper_dir = state.piper.piper_dir().to_path_buf();
+    let handle = app_handle.clone();
+
+    tts::download_piper_exe(&piper_dir, |downloaded, total| {
+        let percent = if total > 0 {
+            (downloaded * 100 / total) as u32
+        } else {
+            0
+        };
+        let _ = handle.emit("piper-download-progress", serde_json::json!({
+            "downloaded": downloaded,
+            "total": total,
+            "percent": percent,
+        }));
+    })
+    .await
+}
+
+#[tauri::command]
+async fn download_piper_voice(
+    app_handle: tauri::AppHandle,
+    voice_id: String,
+) -> Result<(), String> {
+    let state: State<AppState> = app_handle.state();
+    let voice_dir = state.piper.voice_dir().to_path_buf();
+    let handle = app_handle.clone();
+
+    tts::download_piper_voice(&voice_dir, &voice_id, |downloaded, total| {
+        let percent = if total > 0 {
+            (downloaded * 100 / total) as u32
+        } else {
+            0
+        };
+        let _ = handle.emit("piper-voice-download-progress", serde_json::json!({
+            "downloaded": downloaded,
+            "total": total,
+            "percent": percent,
+        }));
+    })
+    .await
+}
+
+#[tauri::command]
+fn delete_piper_voice(state: State<AppState>, voice_id: String) -> Result<(), String> {
+    state.piper.delete_voice(&voice_id)
 }
 
 // ── LLM Formatting commands ─────────────────────────────────────────────
@@ -720,7 +840,7 @@ fn main() {
     let tailscale_info = tailscale::detect();
     let tailscale_cert: Option<(Vec<u8>, Vec<u8>, String)> =
         tailscale_info.as_ref().and_then(|ts| {
-            let cert_dir = std::env::temp_dir().join("deskmic-certs");
+            let cert_dir = std::env::temp_dir().join("dictator-certs");
             let _ = std::fs::create_dir_all(&cert_dir);
             let cert_path = cert_dir.join("cert.pem");
             let key_path = cert_dir.join("key.pem");
@@ -733,7 +853,7 @@ fn main() {
                 Err(e) => {
                     eprintln!("Tailscale cert failed: {e}");
                     eprintln!(
-                        "Hint: try running DeskMic as Administrator, or run in an admin terminal:"
+                        "Hint: try running Dictator as Administrator, or run in an admin terminal:"
                     );
                     eprintln!(
                         "  tailscale cert --cert-file=\"{}\" --key-file=\"{}\" {}",
@@ -803,6 +923,11 @@ fn main() {
             inject_hotkey: Mutex::new("none".into()),
             tts_hotkey: Mutex::new("none".into()),
             speaker: Arc::new(Mutex::new(None)),
+            piper: Arc::new(tts::PiperSpeaker::new(
+                model_manager::models_dir().join("piper"),
+                model_manager::models_dir().join("piper-voices"),
+            )),
+            tts_engine: Mutex::new("sapi".into()),
             formatter: formatter.clone(),
             llm_status: Arc::new(Mutex::new(None)),
             llm_error: Mutex::new(None),
@@ -838,6 +963,14 @@ fn main() {
             list_tts_voices,
             set_tts_voice,
             set_tts_rate,
+            get_tts_engine,
+            set_tts_engine,
+            has_piper,
+            list_piper_voices,
+            set_piper_voice,
+            download_piper,
+            download_piper_voice,
+            delete_piper_voice,
             list_formats,
             get_llm_status,
             format_text,
@@ -954,7 +1087,7 @@ fn main() {
 
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("Missing app icon").clone())
-                .tooltip("DeskMic Dictation")
+                .tooltip("Dictator")
                 .menu(&tray_menu)
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
@@ -999,7 +1132,7 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running DeskMic");
+        .expect("error while running Dictator");
 }
 
 fn find_model_path() -> PathBuf {
