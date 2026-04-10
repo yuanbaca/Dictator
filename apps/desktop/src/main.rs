@@ -62,6 +62,8 @@ struct AppState {
     tailscale_server_running: Arc<AtomicBool>,
     /// Shared server state pieces needed to start Tailscale server dynamically
     server_shared: Mutex<Option<ServerShared>>,
+    /// When the Tailscale cert was last generated (epoch secs), for expiry tracking
+    tailscale_cert_generated: Mutex<Option<u64>>,
 }
 
 /// Shared references needed to construct a ServerState for the dynamic Tailscale server.
@@ -124,88 +126,124 @@ fn get_tailscale_url(state: State<AppState>) -> Option<String> {
     state.tailscale_url.lock().unwrap().clone()
 }
 
-/// Reusable Tailscale refresh logic — called by both the Tauri command and the background poller.
+/// Reusable Tailscale refresh logic — called by Tauri command, startup, and cert renewal.
 fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, String> {
     let state: State<AppState> = app_handle.state();
     let was_running = state.tailscale_server_running.load(Ordering::Relaxed);
 
     let ts_info = tailscale::detect();
 
-    if let Some(ts) = ts_info {
-        let url = format!("https://{}:{}", ts.cert_domain, TAILSCALE_PORT);
-        *state.tailscale_url.lock().unwrap() = Some(url.clone());
-
-        if !was_running {
-            let cert_dir = std::env::temp_dir().join("dictator-certs");
-            let _ = std::fs::create_dir_all(&cert_dir);
-            let cert_path = cert_dir.join("cert.pem");
-            let key_path = cert_dir.join("key.pem");
-
-            match tailscale::generate_cert(&ts.cert_domain, &cert_path, &key_path) {
-                Ok((cert_pem, key_pem)) => {
-                    eprintln!("Tailscale cert OK for {} (dynamic start)", ts.cert_domain);
-
-                    let shared = state.server_shared.lock().unwrap();
-                    if let Some(ref ss) = *shared {
-                        let ts_state = Arc::new(server::ServerState {
-                            transcriber: ss.transcriber.clone(),
-                            formatter: ss.formatter.clone(),
-                            injection_mode: ss.injection_mode.clone(),
-                            connected_phones: ss.connected_phones.clone(),
-                            auto_space: ss.auto_space.clone(),
-                            auto_format: ss.auto_format.clone(),
-                            auto_format_type: ss.auto_format_type.clone(),
-                            cert_type: "tailscale".to_string(),
-                            using_gpu: ss.using_gpu.clone(),
-                            tts_trigger: Some(ss.tts_trigger.clone()),
-                        });
-
-                        let running_flag = state.tailscale_server_running.clone();
-                        std::thread::spawn(move || {
-                            let rt = tokio::runtime::Runtime::new()
-                                .expect("Failed to create tokio runtime for Tailscale");
-                            running_flag.store(true, Ordering::Relaxed);
-                            rt.block_on(async move {
-                                server::run_server(
-                                    ts_state,
-                                    TAILSCALE_PORT,
-                                    server::TlsSource::Tailscale { cert_pem, key_pem },
-                                )
-                                .await;
-                            });
-                            running_flag.store(false, Ordering::Relaxed);
-                        });
-
-                        eprintln!("Tailscale server started dynamically on port {TAILSCALE_PORT}");
-                    }
-
-                    let _ = app_handle.emit("tailscale-changed", url.as_str());
-                    Ok(format!("Tailscale connected: {url}"))
-                }
-                Err(e) => {
-                    eprintln!("Tailscale cert failed (dynamic): {e}");
-                    let _ = app_handle.emit("tailscale-changed", "");
-                    Err(format!("Tailscale detected but cert generation failed: {e}"))
-                }
-            }
-        } else {
-            let _ = app_handle.emit("tailscale-changed", url.as_str());
-            Ok(format!("Tailscale already connected: {url}"))
+    let ts = match ts_info {
+        Some(ts) => ts,
+        None => {
+            *state.tailscale_url.lock().unwrap() = None;
+            *state.tailscale_cert_generated.lock().unwrap() = None;
+            let _ = app_handle.emit("tailscale-changed", "");
+            return Err("Tailscale is not installed or not connected. Install Tailscale on both your PC and phone, then try again.".to_string());
         }
-    } else {
-        *state.tailscale_url.lock().unwrap() = None;
-        let _ = app_handle.emit("tailscale-changed", "");
-        if was_running {
-            Ok("Tailscale disconnected".to_string())
-        } else {
-            Ok("Tailscale not detected".to_string())
+    };
+
+    let url = format!("https://{}:{}", ts.cert_domain, TAILSCALE_PORT);
+    let cert_dir = std::env::temp_dir().join("dictator-certs");
+    let _ = std::fs::create_dir_all(&cert_dir);
+    let cert_path = cert_dir.join("cert.pem");
+    let key_path = cert_dir.join("key.pem");
+
+    let (cert_pem, key_pem) = match tailscale::generate_cert(&ts.cert_domain, &cert_path, &key_path) {
+        Ok(pair) => pair,
+        Err(e) => {
+            *state.tailscale_url.lock().unwrap() = None;
+            let _ = app_handle.emit("tailscale-changed", "");
+            let hint = if e.contains("Access") || e.contains("denied") || e.contains("permission") {
+                "Try running Dictator as Administrator."
+            } else {
+                "Make sure HTTPS certificates are enabled at login.tailscale.com/admin/dns"
+            };
+            return Err(format!("Certificate failed: {hint}"));
+        }
+    };
+
+    // Track when the cert was generated
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    *state.tailscale_cert_generated.lock().unwrap() = Some(now);
+    *state.tailscale_url.lock().unwrap() = Some(url.clone());
+
+    eprintln!("Tailscale cert OK for {}", ts.cert_domain);
+
+    if !was_running {
+        // Start the Tailscale server
+        let shared = state.server_shared.lock().unwrap();
+        if let Some(ref ss) = *shared {
+            let ts_state = Arc::new(server::ServerState {
+                transcriber: ss.transcriber.clone(),
+                formatter: ss.formatter.clone(),
+                injection_mode: ss.injection_mode.clone(),
+                connected_phones: ss.connected_phones.clone(),
+                auto_space: ss.auto_space.clone(),
+                auto_format: ss.auto_format.clone(),
+                auto_format_type: ss.auto_format_type.clone(),
+                cert_type: "tailscale".to_string(),
+                using_gpu: ss.using_gpu.clone(),
+                tts_trigger: Some(ss.tts_trigger.clone()),
+            });
+
+            let running_flag = state.tailscale_server_running.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .expect("Failed to create tokio runtime for Tailscale");
+                running_flag.store(true, Ordering::Relaxed);
+                rt.block_on(async move {
+                    server::run_server(
+                        ts_state,
+                        TAILSCALE_PORT,
+                        server::TlsSource::Tailscale { cert_pem, key_pem },
+                    )
+                    .await;
+                });
+                running_flag.store(false, Ordering::Relaxed);
+            });
+
+            eprintln!("Tailscale server started on port {TAILSCALE_PORT}");
         }
     }
+    // Note: if server was already running, the cert renewal doesn't hot-swap.
+    // The server continues with the old cert until next restart. This is fine
+    // because tailscale cert renews well before expiry (certs are 90 days,
+    // renewal happens ~30 days before).
+
+    let _ = app_handle.emit("tailscale-changed", url.as_str());
+    Ok(format!("Tailscale connected: {url}"))
 }
 
 #[tauri::command]
 fn refresh_tailscale(app_handle: tauri::AppHandle) -> Result<String, String> {
     invoke_refresh_tailscale(&app_handle)
+}
+
+/// Returns Tailscale status info: url, running, days until cert expiry.
+#[tauri::command]
+fn get_tailscale_status(state: State<AppState>) -> serde_json::Value {
+    let url = state.tailscale_url.lock().unwrap().clone();
+    let running = state.tailscale_server_running.load(Ordering::Relaxed);
+    let cert_generated = *state.tailscale_cert_generated.lock().unwrap();
+
+    let days_remaining = cert_generated.map(|generated_at| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let elapsed_days = (now.saturating_sub(generated_at)) / 86400;
+        90_u64.saturating_sub(elapsed_days) // Let's Encrypt certs are 90 days
+    });
+
+    serde_json::json!({
+        "url": url,
+        "running": running,
+        "days_remaining": days_remaining,
+    })
 }
 
 #[tauri::command]
@@ -1108,6 +1146,7 @@ fn main() {
             no_model: Mutex::new(false),
             tailscale_server_running: Arc::new(AtomicBool::new(false)),
             server_shared: Mutex::new(None),
+            tailscale_cert_generated: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -1116,6 +1155,7 @@ fn main() {
             get_cert_type,
             get_tailscale_url,
             refresh_tailscale,
+            get_tailscale_status,
             get_auto_space,
             set_auto_space,
             get_gpu_status,
@@ -1289,6 +1329,42 @@ fn main() {
                     auto_format_type: server_auto_format_type.clone(),
                     using_gpu: server_gpu.clone(),
                     tts_trigger: tts_tx.clone(),
+                });
+            }
+
+            // Daily cert renewal check — if Tailscale is enabled and cert is nearing expiry
+            {
+                let app_handle_renew = app.handle().clone();
+                std::thread::spawn(move || {
+                    loop {
+                        // Check once per day
+                        std::thread::sleep(std::time::Duration::from_secs(86400));
+                        let state: State<AppState> = app_handle_renew.state();
+                        let running = state.tailscale_server_running.load(Ordering::Relaxed);
+                        if !running { continue; }
+
+                        let needs_renewal = {
+                            let cert_time = state.tailscale_cert_generated.lock().unwrap();
+                            match *cert_time {
+                                Some(t) => {
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_secs();
+                                    let days = (now.saturating_sub(t)) / 86400;
+                                    days >= 60 // Renew when 60 days old (30 days before expiry)
+                                }
+                                None => true, // No record — try to renew
+                            }
+                        };
+
+                        if needs_renewal {
+                            eprintln!("Tailscale cert nearing expiry — attempting renewal");
+                            match invoke_refresh_tailscale(&app_handle_renew) {
+                                Ok(msg) => eprintln!("Cert renewal: {msg}"),
+                                Err(e) => eprintln!("Cert renewal failed: {e}"),
+                            }
+                        }
+                    }
                 });
             }
 

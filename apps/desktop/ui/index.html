@@ -2227,24 +2227,57 @@
       try {
         const msg = await invoke('refresh_tailscale');
         showHint(msg);
+        // Show cert expiry info
+        try {
+          const status = await invoke('get_tailscale_status');
+          if (status.days_remaining != null) {
+            const days = status.days_remaining;
+            const expiryText = days > 30
+              ? 'Certificate valid for ' + days + ' days'
+              : days > 7
+                ? '⚠️ Certificate expires in ' + days + ' days'
+                : '🔴 Certificate expires in ' + days + ' days — will auto-renew';
+            tailscaleHint.innerHTML = expiryText;
+          }
+        } catch (_) {}
+        return true;
       } catch (err) {
-        showError('Tailscale: ' + err);
+        showError('' + err);
+        return false;
       }
     }
 
     tailscaleToggle.addEventListener('click', async () => {
-      tailscaleEnabled = !tailscaleEnabled;
-      localStorage.setItem('dictator-tailscale', tailscaleEnabled);
-      updateTailscaleUI();
-      if (tailscaleEnabled) {
-        await enableTailscale();
+      if (!tailscaleEnabled) {
+        // Turning ON — try to enable, revert if it fails
+        tailscaleEnabled = true;
+        updateTailscaleUI();
+        const ok = await enableTailscale();
+        if (!ok) {
+          tailscaleEnabled = false;
+          updateTailscaleUI();
+          localStorage.setItem('dictator-tailscale', 'false');
+          return;
+        }
+      } else {
+        // Turning OFF
+        tailscaleEnabled = false;
+        updateTailscaleUI();
       }
+      localStorage.setItem('dictator-tailscale', tailscaleEnabled);
     });
 
     updateTailscaleUI();
-    // If user previously enabled Tailscale, try to start it
+    // If user previously enabled Tailscale, try to re-enable (also renews cert)
     if (tailscaleEnabled) {
-      enableTailscale();
+      enableTailscale().then(ok => {
+        if (!ok) {
+          // Tailscale no longer available — revert toggle
+          tailscaleEnabled = false;
+          updateTailscaleUI();
+          localStorage.setItem('dictator-tailscale', 'false');
+        }
+      });
     }
 
     loadAudioDevices();
