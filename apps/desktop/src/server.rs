@@ -34,6 +34,8 @@ pub struct ServerState {
     pub auto_format_type: Arc<Mutex<String>>,
     pub cert_type: String,
     pub using_gpu: Arc<Mutex<Option<bool>>>,
+    /// Channel for phone to trigger TTS read-aloud on the desktop.
+    pub tts_trigger: Option<std::sync::mpsc::Sender<()>>,
 }
 
 /// The mobile companion HTML (embedded at compile time).
@@ -493,6 +495,12 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                                 if let Err(e) = injection::send_key_by_name(key) {
                                     eprintln!("Key injection failed: {e}");
                                 }
+                            }
+                        }
+                        Some("read_aloud") => {
+                            if let Some(tx) = &state.tts_trigger {
+                                let _ = tx.send(());
+                                eprintln!("TTS read-aloud triggered from phone");
                             }
                         }
                         _ => {}

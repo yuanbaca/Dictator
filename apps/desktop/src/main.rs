@@ -1025,6 +1025,53 @@ fn main() {
             let server_auto_format_type = auto_format_type.clone();
             let server_gpu = using_gpu.clone();
 
+            // Channel for phone to trigger TTS read-aloud on desktop
+            let (tts_tx, tts_rx) = std::sync::mpsc::channel::<()>();
+            {
+                let app_handle_tts = app.handle().clone();
+                std::thread::spawn(move || {
+                    while tts_rx.recv().is_ok() {
+                        let state: State<AppState> = app_handle_tts.state();
+                        let engine = state.tts_engine.lock().unwrap().clone();
+                        // Toggle: if already speaking, stop
+                        if engine == "piper" {
+                            if state.piper.is_speaking() {
+                                state.piper.stop();
+                                continue;
+                            }
+                        } else {
+                            let guard = state.speaker.lock().unwrap();
+                            if let Some(s) = guard.as_ref() {
+                                if s.is_speaking() {
+                                    let _ = s.stop();
+                                    continue;
+                                }
+                            }
+                        }
+                        match tts::capture_selected_text() {
+                            Ok(text) => {
+                                let res = if engine == "piper" {
+                                    state.piper.speak(&text)
+                                } else {
+                                    let mut guard = state.speaker.lock().unwrap();
+                                    if guard.is_none() {
+                                        match tts::SapiSpeaker::new() {
+                                            Ok(s) => { *guard = Some(s); }
+                                            Err(e) => { eprintln!("SAPI init failed: {e}"); continue; }
+                                        }
+                                    }
+                                    guard.as_ref().unwrap().speak(&text)
+                                };
+                                if let Err(e) = res {
+                                    eprintln!("TTS speak failed: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("Capture selected text failed: {e}"),
+                        }
+                    }
+                });
+            }
+
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
@@ -1039,6 +1086,7 @@ fn main() {
                         auto_format_type: server_auto_format_type.clone(),
                         cert_type: "self-signed".to_string(),
                         using_gpu: server_gpu.clone(),
+                        tts_trigger: Some(tts_tx.clone()),
                     });
                     let lan = tokio::spawn(async move {
                         server::run_server(
@@ -1061,6 +1109,7 @@ fn main() {
                             auto_format_type: server_auto_format_type,
                             cert_type: "tailscale".to_string(),
                             using_gpu: server_gpu,
+                            tts_trigger: Some(tts_tx),
                         });
                         let ts = tokio::spawn(async move {
                             server::run_server(
@@ -1079,7 +1128,7 @@ fn main() {
 
             // ── System tray — hides to tray on close, quit from menu ───
             let show_item =
-                tauri::menu::MenuItem::with_id(app, "show", "Show DeskMic", true, None::<&str>)?;
+                tauri::menu::MenuItem::with_id(app, "show", "Show Dictator", true, None::<&str>)?;
             let quit_item =
                 tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu =

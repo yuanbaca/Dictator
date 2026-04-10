@@ -295,6 +295,7 @@
       <button class="key-btn" id="enterBtn">Enter ↵</button>
       <button class="key-btn" id="tabBtn">Tab ⇥</button>
       <button class="key-btn" id="backspaceBtn">⌫</button>
+      <button class="key-btn" id="readAloudBtn" style="border-color:#4ecca3; color:#4ecca3;">Read Aloud</button>
     </div>
     <div class="setting-row">
       <label>Add space after insert</label>
@@ -672,6 +673,11 @@
     document.getElementById('enterBtn').addEventListener('click', () => sendKey('enter'));
     document.getElementById('tabBtn').addEventListener('click', () => sendKey('tab'));
     document.getElementById('backspaceBtn').addEventListener('click', () => sendKey('backspace'));
+    document.getElementById('readAloudBtn').addEventListener('click', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'read_aloud' }));
+      }
+    });
 
     // --- Auto-space toggle ---
     const autoSpaceToggle = document.getElementById('autoSpaceToggle');
