@@ -1934,6 +1934,26 @@
     });
 
     // ── Tray event listeners ──────────────────────────────────────────────
+    // Tray tried to enable auto-format but no LLM model exists — open settings and download
+    listen('tray-autoformat-needs-model', async () => {
+      settingsOverlay.classList.add('visible');
+      // Enable the toggle visually and start the download
+      autoFormatEnabled = true;
+      autoFormatToggle.classList.add('on');
+      localStorage.setItem('dictator-autoformat', 'true');
+      updateAutoFormatUI();
+      try { await invoke('set_auto_format', { enabled: true }); } catch (_) {}
+      const ok = await ensureLlmModel();
+      if (!ok) {
+        // Download failed — revert
+        autoFormatEnabled = false;
+        autoFormatToggle.classList.remove('on');
+        localStorage.setItem('dictator-autoformat', 'false');
+        updateAutoFormatUI();
+        try { await invoke('set_auto_format', { enabled: false }); } catch (_) {}
+      }
+    });
+
     // Tray icon can toggle auto-format and select format types — sync to frontend
     listen('autoformat-changed', async (event) => {
       const enabled = event.payload;

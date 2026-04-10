@@ -1460,8 +1460,20 @@ fn main() {
                     let id = event.id().as_ref().to_string();
                     match id.as_str() {
                         "autoformat" => {
-                            // Toggle auto-format on/off
                             let state: State<AppState> = app.state();
+                            let currently_on = *state.auto_format.lock().unwrap();
+
+                            if !currently_on && !model_manager::has_llm_model() {
+                                // No model yet — show the app and trigger download
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                    let _ = win.emit("tray-autoformat-needs-model", ());
+                                }
+                                return;
+                            }
+
+                            // Toggle auto-format on/off
                             let mut af = state.auto_format.lock().unwrap();
                             *af = !*af;
                             let enabled = *af;
@@ -1469,7 +1481,6 @@ fn main() {
                             if let Some(win) = app.get_webview_window("main") {
                                 let _ = win.emit("autoformat-changed", enabled);
                             }
-                            // Update tray label
                             let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
                             let _ = autoformat_item.set_text(label);
                         }
@@ -1488,7 +1499,16 @@ fn main() {
                             app.exit(0);
                         }
                         _ if id.starts_with("fmt_") => {
-                            // Format type selected
+                            // Format type selected — check model first
+                            if !model_manager::has_llm_model() {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                    let _ = win.emit("tray-autoformat-needs-model", ());
+                                }
+                                return;
+                            }
+
                             let fmt_type = id.strip_prefix("fmt_").unwrap().to_string();
                             let state: State<AppState> = app.state();
                             *state.auto_format_type.lock().unwrap() = fmt_type.clone();
@@ -1531,8 +1551,20 @@ fn main() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        // Left-click: toggle auto-format
                         let state: State<AppState> = app.state();
+                        let currently_on = *state.auto_format.lock().unwrap();
+
+                        if !currently_on && !model_manager::has_llm_model() {
+                            // No model yet — show the app and trigger download
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                                let _ = win.emit("tray-autoformat-needs-model", ());
+                            }
+                            return;
+                        }
+
+                        // Left-click: toggle auto-format
                         let mut af = state.auto_format.lock().unwrap();
                         *af = !*af;
                         let enabled = *af;
