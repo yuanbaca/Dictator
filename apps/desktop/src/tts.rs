@@ -376,6 +376,28 @@ impl PiperSpeaker {
         Ok(())
     }
 
+    pub fn pause(&self) {
+        let guard = self.sink.lock().unwrap();
+        if let Some(ref sink) = *guard {
+            sink.pause();
+        }
+    }
+
+    pub fn resume(&self) {
+        let guard = self.sink.lock().unwrap();
+        if let Some(ref sink) = *guard {
+            sink.play();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        let guard = self.sink.lock().unwrap();
+        match guard.as_ref() {
+            Some(sink) => sink.is_paused(),
+            None => false,
+        }
+    }
+
     pub fn stop(&self) {
         if let Some(sink) = self.sink.lock().unwrap().take() {
             sink.stop();

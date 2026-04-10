@@ -1864,6 +1864,66 @@
       }
     });
 
+    // ── TTS state & text display ──────────────────────────────────────
+    let ttsState = 'idle'; // 'idle' | 'speaking' | 'paused'
+
+    listen('tts-state', (event) => {
+      ttsState = event.payload;
+      if (ttsState === 'speaking') {
+        setStatus('ready', '🔊 Speaking...');
+        micBtn.classList.add('disabled');
+      } else if (ttsState === 'paused') {
+        setStatus('ready', '⏸ Paused');
+      } else {
+        setStatus('ready', 'Ready — click the mic to record');
+        micBtn.classList.remove('disabled');
+        // Restore normal transcript if we were showing TTS text
+        transcript.style.fontStyle = '';
+        if (currentText) {
+          transcript.textContent = currentText;
+          transcript.classList.remove('empty');
+        } else {
+          transcript.textContent = 'Transcribed text will appear here';
+          transcript.classList.add('empty');
+        }
+      }
+    });
+
+    listen('tts-text', (event) => {
+      const ttsText = event.payload;
+      transcript.textContent = ttsText;
+      transcript.classList.remove('empty');
+      transcript.style.fontStyle = 'italic';
+    });
+
+    // ── Escape key to cancel recording / stop TTS ──────────────────────
+    document.addEventListener('keydown', async (e) => {
+      if (e.key === 'Escape') {
+        // Cancel recording if active
+        if (micBtn.classList.contains('recording')) {
+          try {
+            await invoke('cancel_recording');
+          } catch (_) {}
+          micBtn.classList.remove('recording');
+          if (recTimerInterval) clearInterval(recTimerInterval);
+          recTimerInterval = null;
+          recTimerEl.textContent = '';
+          recTimerEl.classList.remove('warning');
+          progressFill.style.width = '0%';
+          setStatus('ready', 'Ready — click the mic to record');
+          micHint.textContent = 'Recording cancelled';
+          soundError();
+          setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
+          return;
+        }
+        // Stop TTS if playing
+        if (ttsState !== 'idle') {
+          try { await invoke('stop_tts'); } catch (_) {}
+          return;
+        }
+      }
+    });
+
     const soundToggle = document.getElementById('soundToggle');
     if (soundEnabled) soundToggle.classList.add('on');
     soundToggle.addEventListener('click', () => {

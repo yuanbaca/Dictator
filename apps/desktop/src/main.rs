@@ -662,35 +662,75 @@ fn stop_speaking(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn read_selected_text(state: State<AppState>) -> Result<(), String> {
+fn read_selected_text(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<(), String> {
     let engine = state.tts_engine.lock().unwrap().clone();
 
-    // Toggle: if already speaking, stop
+    // Cycle: speaking → pause, paused → resume, idle → capture & speak
     if engine == "piper" {
         if state.piper.is_speaking() {
-            state.piper.stop();
-            return Ok(());
+            if state.piper.is_paused() {
+                state.piper.resume();
+                let _ = app_handle.emit("tts-state", "speaking");
+                return Ok(());
+            } else {
+                state.piper.pause();
+                let _ = app_handle.emit("tts-state", "paused");
+                return Ok(());
+            }
         }
     } else {
         let guard = state.speaker.lock().unwrap();
         if let Some(speaker) = guard.as_ref() {
             if speaker.is_speaking() {
-                return speaker.stop();
+                // SAPI doesn't support pause — stop instead
+                let _ = speaker.stop();
+                let _ = app_handle.emit("tts-state", "idle");
+                return Ok(());
             }
         }
     }
 
     let text = tts::capture_selected_text()?;
 
+    // Emit the text to the frontend so it can display it
+    let _ = app_handle.emit("tts-text", text.as_str());
+    let _ = app_handle.emit("tts-state", "speaking");
+
     if engine == "piper" {
-        state.piper.speak(&text)
+        let piper = state.piper.clone();
+        let handle = app_handle.clone();
+        std::thread::spawn(move || {
+            let result = piper.speak(&text);
+            let _ = handle.emit("tts-state", "idle");
+            if let Err(e) = result {
+                eprintln!("TTS error: {e}");
+            }
+        });
+        Ok(())
     } else {
         let mut guard = state.speaker.lock().unwrap();
         if guard.is_none() {
             *guard = Some(tts::SapiSpeaker::new()?);
         }
-        guard.as_ref().unwrap().speak(&text)
+        let result = guard.as_ref().unwrap().speak(&text);
+        let _ = app_handle.emit("tts-state", "idle");
+        result
     }
+}
+
+#[tauri::command]
+fn stop_tts(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<(), String> {
+    let engine = state.tts_engine.lock().unwrap().clone();
+    if engine == "piper" {
+        state.piper.stop();
+    } else {
+        let guard = state.speaker.lock().unwrap();
+        if let Some(speaker) = guard.as_ref() {
+            speaker.stop()?;
+        }
+    }
+    let _ = app_handle.emit("tts-state", "idle");
+    Ok(())
 }
 
 #[tauri::command]
@@ -1034,6 +1074,7 @@ fn main() {
             speak_text,
             stop_speaking,
             read_selected_text,
+            stop_tts,
             list_tts_voices,
             set_tts_voice,
             set_tts_rate,
@@ -1119,10 +1160,16 @@ fn main() {
                     while tts_rx.recv().is_ok() {
                         let state: State<AppState> = app_handle_tts.state();
                         let engine = state.tts_engine.lock().unwrap().clone();
-                        // Toggle: if already speaking, stop
+                        // Cycle: speaking → pause, paused → resume, idle → speak
                         if engine == "piper" {
                             if state.piper.is_speaking() {
-                                state.piper.stop();
+                                if state.piper.is_paused() {
+                                    state.piper.resume();
+                                    let _ = app_handle_tts.emit("tts-state", "speaking");
+                                } else {
+                                    state.piper.pause();
+                                    let _ = app_handle_tts.emit("tts-state", "paused");
+                                }
                                 continue;
                             }
                         } else {
@@ -1130,14 +1177,19 @@ fn main() {
                             if let Some(s) = guard.as_ref() {
                                 if s.is_speaking() {
                                     let _ = s.stop();
+                                    let _ = app_handle_tts.emit("tts-state", "idle");
                                     continue;
                                 }
                             }
                         }
                         match tts::capture_selected_text() {
                             Ok(text) => {
+                                let _ = app_handle_tts.emit("tts-text", text.as_str());
+                                let _ = app_handle_tts.emit("tts-state", "speaking");
                                 let res = if engine == "piper" {
-                                    state.piper.speak(&text)
+                                    let result = state.piper.speak(&text);
+                                    let _ = app_handle_tts.emit("tts-state", "idle");
+                                    result
                                 } else {
                                     let mut guard = state.speaker.lock().unwrap();
                                     if guard.is_none() {
@@ -1146,7 +1198,9 @@ fn main() {
                                             Err(e) => { eprintln!("SAPI init failed: {e}"); continue; }
                                         }
                                     }
-                                    guard.as_ref().unwrap().speak(&text)
+                                    let result = guard.as_ref().unwrap().speak(&text);
+                                    let _ = app_handle_tts.emit("tts-state", "idle");
+                                    result
                                 };
                                 if let Err(e) = res {
                                     eprintln!("TTS speak failed: {e}");

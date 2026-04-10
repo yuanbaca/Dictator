@@ -16,13 +16,17 @@ Your phone acts as a wireless microphone. Audio is sent to your PC over your loc
 ## Features
 
 - Local speech-to-text via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) (no internet required)
+- **AI text formatting** — optional local LLM (llama.cpp) cleans up, rephrases, or reformats your dictation before insertion. Multiple presets: clean up, professional, casual, bullet points, and more. Downloads a ~2 GB model on first use.
+- **Neural text-to-speech** — highlight text anywhere and hear it read aloud using [Piper](https://github.com/rhasspy/piper) neural voices or Windows SAPI. Pause/resume with the same hotkey. 10+ downloadable voice models.
 - Text injection via clipboard paste or simulated keystrokes
 - Auto-space after each dictation (toggleable)
+- Escape key cancels recording or stops TTS playback
+- Configurable hotkeys for recording, text injection, and read-aloud
 - Two connection options:
   - **LAN** (port 3456) -- self-signed cert, same WiFi, works immediately
   - **Tailscale** (port 3457) -- trusted cert, works from anywhere, no browser warnings
 - Optional GPU acceleration via Vulkan
-- Phone companion web app with setup guide at `/setup`
+- Phone companion web app with recording, key buttons, and read-aloud trigger
 
 ## Requirements
 
@@ -69,7 +73,7 @@ Requires the Vulkan SDK to be installed. The app will try GPU first and fall bac
 run.bat
 ```
 
-Or directly: `apps\desktop\target\release\deskmic.exe`
+Or directly: `apps\desktop\target\release\dictator.exe`
 
 ## Phone Setup
 
@@ -87,6 +91,10 @@ apps/desktop/          Tauri desktop app (Rust backend + HTML frontend)
   src/main.rs          App entry point, Tauri commands
   src/server.rs        HTTPS server for phone companion
   src/transcription.rs Whisper integration
+  src/tts.rs           Text-to-speech (SAPI + Piper neural voices)
+  src/llm.rs           LLM text formatting via llama.cpp
+  src/templates.rs     LLM format presets (clean up, professional, etc.)
+  src/model_manager.rs Whisper model discovery and download
   src/tailscale.rs     Tailscale detection and cert generation
   ui/index.html        Desktop UI
   companion/           Phone companion web app
