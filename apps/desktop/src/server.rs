@@ -328,21 +328,99 @@ fn bytes_to_f32_samples(data: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Get the local IP addresses to display to the user.
+/// Get local IP addresses, with the best LAN IP first.
+///
+/// Parses `ipconfig` output on Windows to enumerate all interfaces, then
+/// filters out virtual adapters (VMware, Hyper-V, VirtualBox, Tailscale)
+/// and sorts so that real LAN IPs (192.168.x.x, 10.x.x.x, 172.16–31.x.x)
+/// appear first.  All IPs are still returned so the self-signed cert covers
+/// them all — the first element is just the one shown to the user.
 pub fn get_local_ips() -> Vec<String> {
-    let mut ips = Vec::new();
+    if let Some(ips) = parse_ipconfig() {
+        if !ips.is_empty() {
+            return ips;
+        }
+    }
 
+    // Fallback: UDP trick (may return Tailscale IP, better than nothing)
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
-                ips.push(addr.ip().to_string());
+                return vec![addr.ip().to_string()];
             }
         }
     }
 
-    if ips.is_empty() {
-        ips.push("127.0.0.1".to_string());
+    vec!["127.0.0.1".to_string()]
+}
+
+/// Parse `ipconfig` to get all IPv4 addresses grouped by adapter.
+fn parse_ipconfig() -> Option<Vec<String>> {
+    let output = std::process::Command::new("ipconfig")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    let mut lan_ips: Vec<String> = Vec::new();
+    let mut other_ips: Vec<String> = Vec::new();
+    let mut current_adapter = String::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        // Adapter header lines look like:
+        //   "Ethernet adapter Ethernet:"
+        //   "Wireless LAN adapter Wi-Fi:"
+        //   "Ethernet adapter vEthernet (WSL):"
+        if !trimmed.is_empty() && line.ends_with(':') && !trimmed.contains('.') {
+            current_adapter = trimmed.to_lowercase();
+            continue;
+        }
+
+        // IPv4 Address line: "IPv4 Address. . . . . . . . . . . : 192.168.1.50"
+        if trimmed.starts_with("IPv4 Address") || trimmed.starts_with("Autoconfiguration IPv4") {
+            if let Some(ip_str) = trimmed.rsplit(':').next() {
+                let ip = ip_str.trim().to_string();
+
+                // Skip loopback, link-local, APIPA
+                if ip.starts_with("127.") || ip.starts_with("169.254.") {
+                    continue;
+                }
+
+                // Check if this is a virtual/tunnel adapter
+                let is_virtual = current_adapter.contains("vmware")
+                    || current_adapter.contains("virtualbox")
+                    || current_adapter.contains("hyper-v")
+                    || current_adapter.contains("vethernet")
+                    || current_adapter.contains("loopback")
+                    || current_adapter.contains("docker")
+                    || current_adapter.contains("wsl");
+
+                // Check if this is a Tailscale IP (CGNAT range 100.64.0.0/10)
+                let is_tailscale = is_tailscale_ip(&ip);
+
+                if is_virtual || is_tailscale {
+                    other_ips.push(ip);
+                } else {
+                    lan_ips.push(ip);
+                }
+            }
+        }
     }
 
-    ips
+    // LAN IPs first, then virtual/Tailscale (for cert SANs)
+    lan_ips.append(&mut other_ips);
+    Some(lan_ips)
+}
+
+/// Check if an IP is in the Tailscale CGNAT range (100.64.0.0/10).
+fn is_tailscale_ip(ip: &str) -> bool {
+    if let Some(rest) = ip.strip_prefix("100.") {
+        if let Some(second_octet) = rest.split('.').next() {
+            if let Ok(n) = second_octet.parse::<u8>() {
+                return (64..=127).contains(&n);
+            }
+        }
+    }
+    false
 }
