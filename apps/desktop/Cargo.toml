@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-gpu = ["whisper-rs/vulkan"]  # Enables Vulkan GPU acceleration (needs Vulkan SDK to build)
+gpu = ["whisper-rs/vulkan", "llama-cpp-2/vulkan"]  # Enables Vulkan GPU acceleration (needs Vulkan SDK to build)
 
 [dependencies]
 # Whisper.cpp Rust bindings for local transcription
@@ -32,6 +32,10 @@ arboard = "3"
 # Audio file loading
 hound = "3.5"
 
+# Local LLM for text formatting
+llama-cpp-2 = "0.1"
+encoding_rs = "0.8"
+
 # Error handling
 anyhow = "1"
 thiserror = "2"
@@ -47,6 +51,10 @@ serde_json = "1"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors"] }
+
+# HTTP client for model downloads
+reqwest = { version = "0.12", features = ["stream", "json"] }
+futures-util = "0.3"
 
 # HTTPS for phone companion (iOS requires HTTPS for microphone access)
 axum-server = { version = "0.7", features = ["tls-rustls"] }

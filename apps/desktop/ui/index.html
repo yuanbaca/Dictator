@@ -248,6 +248,14 @@
     }
 
     .btn-inject:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-inject.countdown {
+      opacity: 1 !important;
+      animation: countdown-pulse 1s infinite;
+    }
+    @keyframes countdown-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
 
     .btn-clear {
       background: var(--border);
@@ -256,6 +264,59 @@
     }
 
     .btn-clear:hover:not(:disabled) { filter: brightness(1.3); }
+
+    .format-bar {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 360px;
+      align-items: center;
+    }
+
+    .format-bar select {
+      flex: 1;
+      background: var(--bg-card);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .format-bar select option {
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .format-btn {
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-card);
+      color: var(--text-dim);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .format-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .format-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .format-btn.loading {
+      color: var(--progress);
+      border-color: var(--progress);
+      animation: pulse 0.8s infinite;
+    }
 
     .hint-msg {
       background: var(--accent-glow);
@@ -507,6 +568,18 @@
       Transcribed text will appear here
     </div>
 
+    <div class="format-bar" id="formatBar">
+      <select id="formatSelect" title="Format text with AI before inserting">
+        <option value="none">No formatting</option>
+        <option value="clean_up">Clean up</option>
+        <option value="email">Email</option>
+        <option value="meeting_notes">Meeting notes</option>
+        <option value="documentation">Documentation</option>
+        <option value="message">Message</option>
+      </select>
+      <button class="format-btn" id="formatBtn" disabled title="Format with AI">Format</button>
+    </div>
+
     <div class="action-buttons">
       <button class="action-btn btn-inject" id="injectBtn" disabled>
         Insert at Cursor
@@ -598,6 +671,17 @@
         </div>
 
         <div class="setting-group">
+          <label>Insert at cursor hotkey</label>
+          <select id="injectHotkeySelect">
+            <option value="none">Disabled</option>
+            <option value="Ctrl+Shift+V">Ctrl + Shift + V</option>
+            <option value="Ctrl+Shift+I">Ctrl + Shift + I</option>
+            <option value="F10">F10</option>
+            <option value="Ctrl+F10">Ctrl + F10</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
           <label>Microphone</label>
           <select id="micDevice">
             <option value="">System default</option>
@@ -619,6 +703,32 @@
           <div class="toggle" id="soundToggle"></div>
         </div>
 
+        <div class="setting-row">
+          <label>Auto-format with AI</label>
+          <div class="toggle" id="autoFormatToggle"></div>
+        </div>
+        <div id="autoFormatHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
+          Adds 5-15 sec processing time after transcription
+        </div>
+        <div id="modelDownloadArea" style="display:none; margin:-6px 0 12px; padding:10px 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="downloadLabel">Downloading AI model...</div>
+          <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+            <div id="downloadFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;" id="downloadStatus"></div>
+        </div>
+
+        <div class="setting-group" id="autoFormatTypeGroup" style="display:none;">
+          <label>Auto-format style</label>
+          <select id="autoFormatType">
+            <option value="clean_up">Clean up</option>
+            <option value="email">Email</option>
+            <option value="meeting_notes">Meeting notes</option>
+            <option value="documentation">Documentation</option>
+            <option value="message">Message</option>
+          </select>
+        </div>
+
         <div class="setting-group">
           <label>Insertion mode</label>
           <select id="injectionMode">
@@ -626,6 +736,27 @@
             <option value="type">Simulated typing (compatible)</option>
           </select>
         </div>
+
+        <div class="setting-group">
+          <label>AI Models</label>
+          <div id="modelList" style="font-size:12px; color:var(--text-dim);"></div>
+          <details style="margin-top:8px;">
+            <summary style="font-size:11px; color:var(--text-muted); cursor:pointer; user-select:none;">Using your own models</summary>
+            <div id="customModelInfo" style="font-size:11px; color:var(--text-muted); margin-top:6px; padding:8px 10px; background:var(--bg); border-radius:6px; line-height:1.5;">
+              You can add your own GGUF models manually.<br>
+              <b>Format:</b> GGUF only (.gguf files)<br>
+              <b>Location:</b> <code id="modelsDirPath" style="font-size:10px; background:var(--border); padding:1px 4px; border-radius:3px; word-break:break-all;"></code><br>
+              <b>Naming:</b> Any filename works. The app auto-detects Phi-3 and Llama 3 chat formats from the filename. Other models use Llama 3 format by default.<br>
+              <b>Tip:</b> Q4_K_M quantizations offer the best balance of speed and quality.
+            </div>
+          </details>
+        </div>
+
+        <div class="setting-row">
+          <label>Check for updates</label>
+          <div class="toggle" id="updateCheckToggle"></div>
+        </div>
+        <div id="versionInfo" style="font-size:11px; color:var(--text-muted); margin:-10px 0 4px; text-align:right;"></div>
       </div>
     </div>
   </div>
@@ -831,6 +962,8 @@
     const hintMsg = document.getElementById('hintMsg');
     const errorMsg = document.getElementById('errorMsg');
     const injectionMode = document.getElementById('injectionMode');
+    const formatSelect = document.getElementById('formatSelect');
+    const formatBtn = document.getElementById('formatBtn');
     const autoSpaceToggle = document.getElementById('autoSpaceToggle');
     const themeSelect = document.getElementById('themeSelect');
     const progressBar = document.getElementById('progressBar');
@@ -839,6 +972,7 @@
 
     let isRecording = false;
     let currentText = '';
+    let rawText = '';     // original whisper output, preserved for re-formatting
     let hotkeyTriggered = false;
 
     // ── Animated Progress Bar ───────────────────────────────────────────
@@ -850,7 +984,7 @@
     function startAnimatedProgress(audioDurationSec) {
       const estimatedMs = Math.max(audioDurationSec * 500, 2000);
       progressCurrent = 0;
-      progressTarget = 70;
+      progressTarget = autoFormatEnabled ? 45 : 70;
       progressBar.classList.remove('done');
       progressFill.style.transition = 'none';
       progressFill.style.width = '0%';
@@ -858,9 +992,26 @@
       function animate(now) {
         const elapsed = now - startTime;
         const fraction = Math.min(elapsed / estimatedMs, 1);
-        // Slow logarithmic curve — steady crawl, no sudden stall
         const eased = Math.log(1 + fraction * 9) / Math.log(10);
         const pct = eased * progressTarget;
+        if (pct > progressCurrent) progressCurrent = pct;
+        progressFill.style.width = progressCurrent + '%';
+        if (fraction < 1) progressAnimFrame = requestAnimationFrame(animate);
+      }
+      progressAnimFrame = requestAnimationFrame(animate);
+    }
+
+    function startFormattingProgress() {
+      if (progressAnimFrame) { cancelAnimationFrame(progressAnimFrame); progressAnimFrame = null; }
+      const fromPct = progressCurrent;
+      progressTarget = 90;
+      const estimatedMs = 8000;
+      const startTime = performance.now();
+      function animate(now) {
+        const elapsed = now - startTime;
+        const fraction = Math.min(elapsed / estimatedMs, 1);
+        const eased = Math.log(1 + fraction * 9) / Math.log(10);
+        const pct = fromPct + eased * (progressTarget - fromPct);
         if (pct > progressCurrent) progressCurrent = pct;
         progressFill.style.width = progressCurrent + '%';
         if (fraction < 1) progressAnimFrame = requestAnimationFrame(animate);
@@ -948,6 +1099,16 @@
       const ctx = getAudioCtx();
       const now = ctx.currentTime;
       playTone(330, now, 0.3, 0.1); // E4 low soft tone
+    }
+
+    function soundLlmStart() {
+      if (!soundEnabled) return;
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      playTone(440, now, 0.1, 0.1);        // A4
+      playTone(554, now + 0.08, 0.1, 0.1); // C#5
+      playTone(659, now + 0.16, 0.1, 0.1); // E5
+      playTone(880, now + 0.24, 0.15, 0.08); // A5 shimmer
     }
 
     // ── Startup ─────────────────────────────────────────────────────────
@@ -1051,14 +1212,37 @@
         startAnimatedProgress(recDurationSec);
 
         try {
-          const text = await invoke('stop_and_transcribe');
+          let text = await invoke('stop_and_transcribe');
+          rawText = text;
+
+          // Auto-format with LLM if enabled
+          if (autoFormatEnabled) {
+            soundLlmStart();
+            micHint.textContent = 'Formatting with AI...';
+            setStatus('transcribing', 'AI formatting...');
+            startFormattingProgress();
+            try {
+              text = await invoke('format_text', {
+                text: rawText,
+                format: autoFormatType.value,
+              });
+            } catch (e) {
+              resetProgress();
+              soundError();
+              showError('Auto-format failed, using raw text: ' + e);
+              text = rawText;
+            }
+          }
+
           completeProgress();
           soundComplete();
+
           currentText = text;
           transcript.textContent = text;
           transcript.classList.remove('empty');
           injectBtn.disabled = false;
           clearBtn.disabled = false;
+          formatBtn.disabled = formatSelect.value === 'none';
           setStatus('ready', 'Ready');
 
           // Auto-inject when triggered by hotkey (user is already in target app)
@@ -1071,7 +1255,7 @@
               micHint.textContent = 'Transcribed (injection failed)';
             }
           } else {
-            micHint.textContent = 'Click to record again';
+            micHint.textContent = autoFormatEnabled ? 'Formatted & ready' : 'Click to record again';
           }
         } catch (e) {
           resetProgress();
@@ -1092,41 +1276,153 @@
     });
 
     // ── Inject ──────────────────────────────────────────────────────────
-    injectBtn.addEventListener('click', async () => {
-      if (!currentText) return;
-      injectBtn.disabled = true;
-      injectBtn.textContent = 'Switch to your app now...';
+    let injecting = false;
+    async function doInject() {
+      if (!currentText || injecting) return;
+      injecting = true;
+      injectBtn.classList.add('countdown');
 
-      await new Promise(r => setTimeout(r, 1500));
+      // Countdown giving user time to click target field
+      const countdownSec = 3;
+      for (let i = countdownSec; i > 0; i--) {
+        injectBtn.textContent = 'Click your target! ' + i + 's';
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      injectBtn.textContent = 'Inserting...';
 
       try {
         await invoke('inject_text', { text: currentText });
         injectBtn.textContent = 'Inserted!';
+        injectBtn.classList.remove('countdown');
         setTimeout(() => {
           injectBtn.textContent = 'Insert at Cursor';
-          injectBtn.disabled = false;
+          injecting = false;
         }, 1500);
       } catch (e) {
         showError('Injection failed: ' + e);
         injectBtn.textContent = 'Insert at Cursor';
-        injectBtn.disabled = false;
+        injectBtn.classList.remove('countdown');
+        injecting = false;
       }
-    });
+    }
+
+    injectBtn.addEventListener('click', doInject);
 
     // ── Clear ───────────────────────────────────────────────────────────
     clearBtn.addEventListener('click', () => {
+      rawText = '';
       currentText = '';
       transcript.textContent = 'Transcribed text will appear here';
       transcript.classList.add('empty');
       injectBtn.disabled = true;
       clearBtn.disabled = true;
+      formatBtn.disabled = true;
+      formatSelect.value = 'none';
     });
+
+    // ── LLM Formatting ─────────────────────────────────────────────────
+    formatSelect.addEventListener('change', () => {
+      formatBtn.disabled = !rawText || formatSelect.value === 'none';
+    });
+
+    formatBtn.addEventListener('click', async () => {
+      if (!rawText || formatSelect.value === 'none') return;
+
+      formatBtn.disabled = true;
+      formatBtn.classList.add('loading');
+      formatBtn.textContent = 'Formatting...';
+      micHint.textContent = 'AI is formatting your text...';
+
+      try {
+        const formatted = await invoke('format_text', {
+          text: rawText,
+          format: formatSelect.value,
+        });
+        currentText = formatted;
+        transcript.textContent = formatted;
+        transcript.classList.remove('empty');
+        injectBtn.disabled = false;
+        micHint.textContent = 'Formatted! Click Insert or pick another format';
+        soundComplete();
+      } catch (e) {
+        showError('Formatting failed: ' + e);
+        micHint.textContent = 'Format failed — you can still insert raw text';
+        soundError();
+      }
+
+      formatBtn.classList.remove('loading');
+      formatBtn.textContent = 'Format';
+      formatBtn.disabled = false;
+    });
+
+    // ── Model Management ─────────────────────────────────────────────────
+    const modelListEl = document.getElementById('modelList');
+
+    async function refreshModelList() {
+      try {
+        const available = await invoke('list_available_models');
+        let html = '';
+        for (const m of available) {
+          html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">';
+          html += '<div style="flex:1;min-width:0;">';
+          html += '<div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + m.name + '</div>';
+          html += '<div style="font-size:10px;color:var(--text-muted);">' + m.size_mb + ' MB</div>';
+          html += '</div>';
+          if (m.installed) {
+            html += '<span style="color:var(--accent);font-size:10px;font-weight:600;white-space:nowrap;padding:2px 8px;border:1px solid var(--accent);border-radius:10px;">Installed</span>';
+            html += '<button onclick="deleteModel(\'' + m.filename.replace(/'/g, "\\'") + '\')" style="background:none;border:1px solid var(--text-muted);color:var(--text-muted);border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap;" title="Delete this model">Delete</button>';
+          } else {
+            html += '<button onclick="downloadModel(\'' + m.id + '\')" style="background:var(--accent);color:var(--bg);border:none;border-radius:6px;padding:4px 12px;font-size:11px;cursor:pointer;white-space:nowrap;">Download</button>';
+          }
+          html += '</div>';
+        }
+        if (!html) html = '<span style="color:var(--text-muted);">No models available</span>';
+        modelListEl.innerHTML = html;
+        // Load models dir path into info section
+        try {
+          const dir = await invoke('get_models_dir');
+          document.getElementById('modelsDirPath').textContent = dir;
+        } catch (e) { /* ignore */ }
+      } catch (e) {
+        modelListEl.innerHTML = '<span style="color:var(--text-muted);">Could not load models</span>';
+      }
+    }
+
+    window.deleteModel = async function(filename) {
+      if (!confirm('Delete this model? You can re-download it later.')) return;
+      try {
+        await invoke('delete_llm_model', { filename });
+        await refreshModelList();
+      } catch (e) {
+        alert('Failed to delete: ' + e);
+      }
+    };
+
+    window.downloadModel = async function(id) {
+      modelDownloadArea.style.display = '';
+      downloadLabel.textContent = 'Downloading AI model...';
+      downloadFill.style.width = '0%';
+      downloadStatus.textContent = 'Starting...';
+      try {
+        await invoke('download_llm_model', { modelId: id });
+        downloadLabel.textContent = 'Download complete!';
+        downloadFill.style.width = '100%';
+        downloadStatus.textContent = '';
+        setTimeout(() => { modelDownloadArea.style.display = 'none'; }, 2000);
+        await refreshModelList();
+      } catch (e) {
+        downloadLabel.textContent = 'Download failed';
+        downloadStatus.textContent = '' + e;
+      }
+    };
 
     // ── Settings Modal ──────────────────────────────────────────────────
     const settingsOverlay = document.getElementById('settingsOverlay');
 
-    document.getElementById('settingsBtn').addEventListener('click', () => {
+    document.getElementById('settingsBtn').addEventListener('click', async () => {
       settingsOverlay.classList.add('visible');
+      if (!modelDownloading) modelDownloadArea.style.display = 'none';
+      await refreshModelList();
     });
 
     document.getElementById('closeSettings').addEventListener('click', () => {
@@ -1163,11 +1459,99 @@
       }
     });
 
+    const injectHotkeySelect = document.getElementById('injectHotkeySelect');
+    injectHotkeySelect.addEventListener('change', async () => {
+      try {
+        await invoke('set_inject_hotkey', { preset: injectHotkeySelect.value });
+        localStorage.setItem('deskmic-inject-hotkey', injectHotkeySelect.value);
+      } catch (e) {
+        showError('Inject hotkey failed: ' + e);
+      }
+    });
+
+    // Listen for inject-at-cursor hotkey event
+    listen('inject-at-cursor', () => { doInject(); });
+
     const soundToggle = document.getElementById('soundToggle');
     if (soundEnabled) soundToggle.classList.add('on');
     soundToggle.addEventListener('click', () => {
       soundEnabled = soundToggle.classList.toggle('on');
       localStorage.setItem('deskmic-sound', soundEnabled);
+    });
+
+    // ── Auto-format toggle ──────────────────────────────────────────────
+    let autoFormatEnabled = localStorage.getItem('deskmic-autoformat') === 'true';
+    let modelDownloading = false;
+    const autoFormatToggle = document.getElementById('autoFormatToggle');
+    const autoFormatHint = document.getElementById('autoFormatHint');
+    const autoFormatTypeGroup = document.getElementById('autoFormatTypeGroup');
+    const autoFormatType = document.getElementById('autoFormatType');
+    const modelDownloadArea = document.getElementById('modelDownloadArea');
+    const downloadFill = document.getElementById('downloadFill');
+    const downloadLabel = document.getElementById('downloadLabel');
+    const downloadStatus = document.getElementById('downloadStatus');
+
+    function updateAutoFormatUI() {
+      autoFormatHint.style.display = autoFormatEnabled ? '' : 'none';
+      autoFormatTypeGroup.style.display = autoFormatEnabled ? '' : 'none';
+    }
+
+    async function ensureLlmModel() {
+      try {
+        const hasModel = await invoke('has_llm_model');
+        if (hasModel) return true;
+      } catch (e) { return false; }
+
+      // No model — start download automatically
+      modelDownloading = true;
+      modelDownloadArea.style.display = '';
+      downloadLabel.textContent = 'Downloading AI model (first time only)...';
+      downloadFill.style.width = '0%';
+      downloadStatus.textContent = 'Starting download...';
+
+      try {
+        await invoke('download_llm_model', { modelId: 'phi3-mini' });
+        downloadLabel.textContent = 'AI model ready!';
+        downloadFill.style.width = '100%';
+        downloadStatus.textContent = '';
+        setTimeout(() => { modelDownloadArea.style.display = 'none'; }, 2000);
+        modelDownloading = false;
+        return true;
+      } catch (e) {
+        downloadLabel.textContent = 'Download failed';
+        downloadStatus.textContent = '' + e;
+        downloadFill.style.width = '0%';
+        modelDownloading = false;
+        return false;
+      }
+    }
+
+    // Listen for download progress
+    listen('llm-download-progress', (event) => {
+      const { downloaded, total, percent } = event.payload;
+      downloadFill.style.width = percent + '%';
+      const mb = (downloaded / 1_000_000).toFixed(0);
+      const totalMb = (total / 1_000_000).toFixed(0);
+      downloadStatus.textContent = mb + ' / ' + totalMb + ' MB (' + percent + '%)';
+    });
+
+    if (autoFormatEnabled) autoFormatToggle.classList.add('on');
+    const savedAutoFormatType = localStorage.getItem('deskmic-autoformat-type');
+    if (savedAutoFormatType) autoFormatType.value = savedAutoFormatType;
+    updateAutoFormatUI();
+
+    autoFormatToggle.addEventListener('click', async () => {
+      autoFormatEnabled = autoFormatToggle.classList.toggle('on');
+      localStorage.setItem('deskmic-autoformat', autoFormatEnabled);
+      updateAutoFormatUI();
+
+      if (autoFormatEnabled) {
+        await ensureLlmModel();
+      }
+    });
+
+    autoFormatType.addEventListener('change', () => {
+      localStorage.setItem('deskmic-autoformat-type', autoFormatType.value);
     });
 
     const autostartToggle = document.getElementById('autostartToggle');
@@ -1266,6 +1650,39 @@
 
     setInterval(pollPhoneStatus, 2000);
 
+    // ── Version check toggle ───────────────────────────────────────────
+    const updateCheckToggle = document.getElementById('updateCheckToggle');
+    const versionInfo = document.getElementById('versionInfo');
+    let updateCheckEnabled = localStorage.getItem('deskmic-updatecheck') === 'true';
+    if (updateCheckEnabled) updateCheckToggle.classList.add('on');
+
+    updateCheckToggle.addEventListener('click', () => {
+      updateCheckEnabled = updateCheckToggle.classList.toggle('on');
+      localStorage.setItem('deskmic-updatecheck', updateCheckEnabled);
+      if (updateCheckEnabled) {
+        checkForUpdates();
+      } else {
+        versionInfo.textContent = '';
+      }
+    });
+
+    async function checkForUpdates() {
+      try {
+        const ver = await invoke('get_app_version');
+        versionInfo.textContent = 'v' + ver + ' — checking…';
+        const info = await invoke('check_for_updates');
+        if (info.update_available) {
+          versionInfo.innerHTML = 'v' + info.current + ' — <a href="' + info.url + '" target="_blank" style="color:var(--accent);">v' + info.latest + ' available</a>';
+        } else if (info.latest) {
+          versionInfo.textContent = 'v' + info.current + ' — up to date';
+        } else {
+          versionInfo.textContent = 'v' + info.current + ' — could not check';
+        }
+      } catch (e) {
+        versionInfo.textContent = 'Could not check for updates';
+      }
+    }
+
     // ── Init ────────────────────────────────────────────────────────────
     async function loadHotkey() {
       const saved = localStorage.getItem('deskmic-hotkey') || 'Ctrl+Shift+Space';
@@ -1273,6 +1690,14 @@
       try {
         await invoke('set_hotkey', { preset: saved });
       } catch (e) { /* ignore */ }
+
+      const savedInject = localStorage.getItem('deskmic-inject-hotkey') || 'none';
+      injectHotkeySelect.value = savedInject;
+      if (savedInject !== 'none') {
+        try {
+          await invoke('set_inject_hotkey', { preset: savedInject });
+        } catch (e) { /* ignore */ }
+      }
     }
 
     async function loadAutostartState() {
@@ -1288,6 +1713,7 @@
     loadAudioDevices();
     loadAutostartState();
     loadHotkey();
+    if (updateCheckEnabled) checkForUpdates();
   </script>
 </body>
 </html>

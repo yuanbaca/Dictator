@@ -3,3 +3,6 @@ pub mod transcription;
 pub mod audio_capture;
 pub mod server;
 pub mod tailscale;
+pub mod llm;
+pub mod model_manager;
+pub mod templates;

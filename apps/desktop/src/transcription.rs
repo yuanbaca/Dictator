@@ -148,7 +148,11 @@ impl Transcriber {
             let start = seg.start_timestamp();
             let end = seg.end_timestamp();
 
-            full_text.push_str(&text);
+            // Skip hallucinated segments (e.g. [BLANK_AUDIO]) so they don't
+            // get appended to real speech
+            if !is_whisper_hallucination(&text) {
+                full_text.push_str(&text);
+            }
 
             segments.push(TranscriptSegment {
                 start_ms: start * 10, // whisper timestamps are in 10ms units

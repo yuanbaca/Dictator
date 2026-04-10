@@ -2,8 +2,11 @@
 
 use deskmic::audio_capture;
 use deskmic::injection::{self, InjectionMode};
+use deskmic::llm;
+use deskmic::model_manager;
 use deskmic::server;
 use deskmic::tailscale;
+use deskmic::templates::FormatType;
 use deskmic::transcription;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +40,14 @@ struct AppState {
     selected_device: Arc<Mutex<Option<String>>>,
     /// Current hotkey preset name (e.g. "Ctrl+Shift+Space")
     hotkey: Mutex<String>,
+    /// Inject-at-cursor hotkey preset
+    inject_hotkey: Mutex<String>,
+    /// LLM formatter (lazy-loaded on first format request)
+    formatter: Arc<Mutex<Option<llm::Formatter>>>,
+    /// LLM status: None = not loaded, Some(true) = loaded, Some(false) = failed
+    llm_status: Arc<Mutex<Option<bool>>>,
+    /// LLM error message if loading failed
+    llm_error: Mutex<Option<String>>,
 }
 
 const LAN_PORT: u16 = 3456;
@@ -253,25 +264,56 @@ fn get_hotkey(state: State<AppState>) -> String {
 }
 
 #[tauri::command]
+fn get_inject_hotkey(state: State<AppState>) -> String {
+    state.inject_hotkey.lock().unwrap().clone()
+}
+
+/// Re-register all global shortcuts from current state.
+fn register_all_hotkeys(
+    app_handle: &tauri::AppHandle,
+    rec_preset: &str,
+    inject_preset: &str,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let _ = app_handle.global_shortcut().unregister_all();
+
+    if let Some(sc) = parse_hotkey_preset(rec_preset) {
+        app_handle
+            .global_shortcut()
+            .register(sc)
+            .map_err(|e| format!("Failed to register recording hotkey: {e}"))?;
+    }
+    if let Some(sc) = parse_hotkey_preset(inject_preset) {
+        app_handle
+            .global_shortcut()
+            .register(sc)
+            .map_err(|e| format!("Failed to register inject hotkey: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn set_hotkey(
     app_handle: tauri::AppHandle,
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-    // Unregister all existing hotkeys
-    let _ = app_handle.global_shortcut().unregister_all();
-
-    // Register new (unless "none")
-    if let Some(sc) = parse_hotkey_preset(&preset) {
-        app_handle
-            .global_shortcut()
-            .register(sc)
-            .map_err(|e| format!("Failed to register hotkey: {e}"))?;
-    }
-
+    let inject = state.inject_hotkey.lock().unwrap().clone();
+    register_all_hotkeys(&app_handle, &preset, &inject)?;
     *state.hotkey.lock().unwrap() = preset;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_inject_hotkey(
+    app_handle: tauri::AppHandle,
+    state: State<AppState>,
+    preset: String,
+) -> Result<(), String> {
+    let rec = state.hotkey.lock().unwrap().clone();
+    register_all_hotkeys(&app_handle, &rec, &preset)?;
+    *state.inject_hotkey.lock().unwrap() = preset;
     Ok(())
 }
 
@@ -294,6 +336,16 @@ fn parse_hotkey_preset(
         )),
         "F9" => Some(Shortcut::new(None, Code::F9)),
         "Ctrl+F9" => Some(Shortcut::new(Some(Modifiers::CONTROL), Code::F9)),
+        "Ctrl+Shift+V" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyV,
+        )),
+        "Ctrl+Shift+I" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyI,
+        )),
+        "F10" => Some(Shortcut::new(None, Code::F10)),
+        "Ctrl+F10" => Some(Shortcut::new(Some(Modifiers::CONTROL), Code::F10)),
         _ => None,
     }
 }
@@ -341,13 +393,201 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+// ── Version Check ───────────────────────────────────────────────────────
+
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[tauri::command]
+fn get_app_version() -> String {
+    APP_VERSION.to_string()
+}
+
+#[tauri::command]
+async fn check_for_updates() -> serde_json::Value {
+    let current = APP_VERSION;
+    // Check GitHub releases API (replace with actual repo when published)
+    let result = reqwest::get(
+        "https://api.github.com/repos/yuanbaca/dictator/releases/latest",
+    )
+    .await;
+
+    match result {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                let json: serde_json::Value = json;
+                let latest = json["tag_name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim_start_matches('v');
+                let url = json["html_url"]
+                    .as_str()
+                    .unwrap_or("");
+                return serde_json::json!({
+                    "current": current,
+                    "latest": latest,
+                    "update_available": latest != current && !latest.is_empty(),
+                    "url": url,
+                });
+            }
+        }
+        _ => {}
+    }
+
+    serde_json::json!({
+        "current": current,
+        "latest": null,
+        "update_available": false,
+        "url": null,
+    })
+}
+
+// ── Model Management commands ───────────────────────────────────────────
+
+#[tauri::command]
+fn has_llm_model() -> bool {
+    model_manager::has_llm_model()
+}
+
+#[tauri::command]
+fn list_llm_models() -> Vec<serde_json::Value> {
+    model_manager::installed_llm_models()
+        .into_iter()
+        .map(|(filename, name)| serde_json::json!({"filename": filename, "name": name}))
+        .collect()
+}
+
+#[tauri::command]
+fn list_available_models() -> Vec<serde_json::Value> {
+    model_manager::AVAILABLE_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "name": m.name,
+                "filename": m.filename,
+                "size_mb": m.size_bytes / 1_000_000,
+                "installed": model_manager::models_dir().join(m.filename).exists(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn download_llm_model(
+    app_handle: tauri::AppHandle,
+    model_id: String,
+) -> Result<String, String> {
+    let handle = app_handle.clone();
+    model_manager::download_model(&model_id, move |downloaded, total| {
+        let pct = if total > 0 {
+            (downloaded as f64 / total as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        let _ = handle.emit("llm-download-progress", serde_json::json!({
+            "downloaded": downloaded,
+            "total": total,
+            "percent": pct,
+        }));
+    })
+    .await
+    .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn delete_llm_model(filename: String) -> Result<(), String> {
+    model_manager::delete_model(&filename)
+}
+
+#[tauri::command]
+fn get_models_dir() -> String {
+    model_manager::models_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| model_manager::models_dir())
+        .to_string_lossy()
+        .to_string()
+}
+
+// ── LLM Formatting commands ─────────────────────────────────────────────
+
+#[tauri::command]
+fn list_formats() -> Vec<serde_json::Value> {
+    FormatType::all()
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "id": f,
+                "label": f.label(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn get_llm_status(state: State<AppState>) -> serde_json::Value {
+    let status = *state.llm_status.lock().unwrap();
+    let error = state.llm_error.lock().unwrap().clone();
+    serde_json::json!({
+        "loaded": status,
+        "error": error,
+    })
+}
+
+/// Lazy-load the LLM and format text. First call triggers model loading.
+#[tauri::command]
+fn format_text(
+    state: State<AppState>,
+    text: String,
+    format: String,
+) -> Result<String, String> {
+    let format_type: FormatType =
+        serde_json::from_value(serde_json::Value::String(format))
+            .map_err(|_| "Unknown format type".to_string())?;
+
+    if format_type == FormatType::None {
+        return Ok(text);
+    }
+
+    // Lazy-load the LLM on first format request
+    {
+        let mut guard = state.formatter.lock().unwrap();
+        if guard.is_none() {
+            let model_path = llm::find_llm_model_path()
+                .ok_or("No LLM model found. Place a .gguf file in the models/ folder.")?;
+
+            match llm::Formatter::new(&model_path) {
+                Ok(f) => {
+                    *state.llm_status.lock().unwrap() = Some(true);
+                    *guard = Some(f);
+                }
+                Err(e) => {
+                    let msg = format!("{e}");
+                    *state.llm_status.lock().unwrap() = Some(false);
+                    *state.llm_error.lock().unwrap() = Some(msg.clone());
+                    return Err(msg);
+                }
+            }
+        }
+    }
+
+    let guard = state.formatter.lock().unwrap();
+    let formatter = guard.as_ref().ok_or("LLM not loaded")?;
+
+    formatter
+        .format_text(&text, format_type)
+        .map_err(|e| format!("{e}"))
+}
+
 // ── App entry point ─────────────────────────────────────────────────────
 
 fn main() {
     let model_path = find_model_path();
     let transcriber: Arc<Mutex<Option<transcription::Transcriber>>> = Arc::new(Mutex::new(None));
+    let formatter: Arc<Mutex<Option<llm::Formatter>>> = Arc::new(Mutex::new(None));
     let injection_mode: Arc<Mutex<String>> = Arc::new(Mutex::new("paste".into()));
     let auto_space: Arc<Mutex<bool>> = Arc::new(Mutex::new(true)); // on by default
+    let auto_format: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let auto_format_type: Arc<Mutex<String>> = Arc::new(Mutex::new("clean_up".into()));
     let connected_phones: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let selected_device: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -412,10 +652,21 @@ fn main() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.emit("toggle-recording", ());
+                            // Check if this is the inject hotkey
+                            let inject_key = app
+                                .try_state::<AppState>()
+                                .and_then(|s| {
+                                    let preset = s.inject_hotkey.lock().unwrap().clone();
+                                    parse_hotkey_preset(&preset)
+                                });
+                            if inject_key.is_some_and(|k| k == *shortcut) {
+                                let _ = win.emit("inject-at-cursor", ());
+                            } else {
+                                let _ = win.emit("toggle-recording", ());
+                            }
                         }
                     }
                 })
@@ -434,6 +685,10 @@ fn main() {
             using_gpu: using_gpu.clone(),
             selected_device: selected_device.clone(),
             hotkey: Mutex::new("Ctrl+Shift+Space".into()),
+            inject_hotkey: Mutex::new("none".into()),
+            formatter: formatter.clone(),
+            llm_status: Arc::new(Mutex::new(None)),
+            llm_error: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -456,6 +711,19 @@ fn main() {
             set_autostart,
             get_hotkey,
             set_hotkey,
+            get_inject_hotkey,
+            set_inject_hotkey,
+            list_formats,
+            get_llm_status,
+            format_text,
+            has_llm_model,
+            list_llm_models,
+            list_available_models,
+            download_llm_model,
+            delete_llm_model,
+            get_models_dir,
+            get_app_version,
+            check_for_updates,
         ])
         .setup(move |app| {
             let transcriber_handle = transcriber.clone();
@@ -491,9 +759,12 @@ fn main() {
             // Start the phone companion HTTPS servers
             // LAN on port 3456 (always, self-signed) + Tailscale on 3457 (if available)
             let server_transcriber = transcriber.clone();
+            let server_formatter = formatter.clone();
             let server_injection = injection_mode.clone();
             let server_phones = connected_phones.clone();
             let server_auto_space = auto_space.clone();
+            let server_auto_format = auto_format.clone();
+            let server_auto_format_type = auto_format_type.clone();
             let server_gpu = using_gpu.clone();
 
             std::thread::spawn(move || {
@@ -502,9 +773,12 @@ fn main() {
                     // LAN server — always runs, self-signed cert, same WiFi only
                     let lan_state = Arc::new(server::ServerState {
                         transcriber: server_transcriber.clone(),
+                        formatter: server_formatter.clone(),
                         injection_mode: server_injection.clone(),
                         connected_phones: server_phones.clone(),
                         auto_space: server_auto_space.clone(),
+                        auto_format: server_auto_format.clone(),
+                        auto_format_type: server_auto_format_type.clone(),
                         cert_type: "self-signed".to_string(),
                         using_gpu: server_gpu.clone(),
                     });
@@ -521,9 +795,12 @@ fn main() {
                     if let Some((cert_pem, key_pem, _domain)) = tailscale_cert {
                         let ts_state = Arc::new(server::ServerState {
                             transcriber: server_transcriber,
+                            formatter: server_formatter,
                             injection_mode: server_injection,
                             connected_phones: server_phones,
                             auto_space: server_auto_space,
+                            auto_format: server_auto_format,
+                            auto_format_type: server_auto_format_type,
                             cert_type: "tailscale".to_string(),
                             using_gpu: server_gpu,
                         });

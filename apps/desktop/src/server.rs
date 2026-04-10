@@ -1,6 +1,8 @@
 //! Embedded web server that serves the phone companion and handles WebSocket audio.
 
 use crate::injection::{self, InjectionMode};
+use crate::llm;
+use crate::templates::FormatType;
 use crate::transcription;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::WebSocketUpgrade;
@@ -24,9 +26,12 @@ pub enum TlsSource {
 /// Shared state for the web server.
 pub struct ServerState {
     pub transcriber: Arc<Mutex<Option<transcription::Transcriber>>>,
+    pub formatter: Arc<Mutex<Option<llm::Formatter>>>,
     pub injection_mode: Arc<Mutex<String>>,
     pub connected_phones: Arc<Mutex<u32>>,
     pub auto_space: Arc<Mutex<bool>>,
+    pub auto_format: Arc<Mutex<bool>>,
+    pub auto_format_type: Arc<Mutex<String>>,
     pub cert_type: String,
     pub using_gpu: Arc<Mutex<Option<bool>>>,
 }
@@ -132,11 +137,29 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
         ))
         .await;
 
-    // Send current auto-space setting so phone UI can sync
+    // Send current settings so phone UI can sync
     let auto_space_val = *state.auto_space.lock().unwrap();
     let _ = socket
         .send(Message::Text(
             serde_json::json!({"type": "setting", "key": "auto_space", "value": auto_space_val})
+                .to_string()
+                .into(),
+        ))
+        .await;
+
+    let auto_format_val = *state.auto_format.lock().unwrap();
+    let _ = socket
+        .send(Message::Text(
+            serde_json::json!({"type": "setting", "key": "auto_format", "value": auto_format_val})
+                .to_string()
+                .into(),
+        ))
+        .await;
+
+    let auto_format_type_val = state.auto_format_type.lock().unwrap().clone();
+    let _ = socket
+        .send(Message::Text(
+            serde_json::json!({"type": "setting", "key": "auto_format_type", "value": auto_format_type_val})
                 .to_string()
                 .into(),
         ))
@@ -247,6 +270,61 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                     Ok(mut text) => {
                         eprintln!("Transcribed: {text}");
 
+                        // Auto-format with LLM if enabled
+                        let should_format = *state.auto_format.lock().unwrap();
+                        if should_format {
+                            let fmt_type_str = state.auto_format_type.lock().unwrap().clone();
+                            let fmt_type: Option<FormatType> =
+                                serde_json::from_value(serde_json::Value::String(fmt_type_str)).ok();
+
+                            if let Some(ft) = fmt_type {
+                                if ft != FormatType::None {
+                                    // Tell phone we're formatting
+                                    let _ = socket
+                                        .send(Message::Text(
+                                            serde_json::json!({"type": "status", "state": "formatting"})
+                                                .to_string()
+                                                .into(),
+                                        ))
+                                        .await;
+
+                                    // Lazy-load LLM if needed, then format
+                                    let formatter = state.formatter.clone();
+                                    let raw = text.clone();
+                                    let formatted = tokio::task::spawn_blocking(move || {
+                                        let mut guard = formatter.lock().unwrap();
+                                        if guard.is_none() {
+                                            if let Some(path) = llm::find_llm_model_path() {
+                                                match llm::Formatter::new(&path) {
+                                                    Ok(f) => { *guard = Some(f); }
+                                                    Err(e) => {
+                                                        eprintln!("LLM load failed: {e}");
+                                                        return Err(format!("{e}"));
+                                                    }
+                                                }
+                                            } else {
+                                                return Err("No LLM model found".into());
+                                            }
+                                        }
+                                        guard.as_ref().unwrap().format_text(&raw, ft).map_err(|e| format!("{e}"))
+                                    }).await;
+
+                                    match formatted {
+                                        Ok(Ok(formatted_text)) => {
+                                            eprintln!("Auto-formatted: {} -> {} chars", text.len(), formatted_text.len());
+                                            text = formatted_text;
+                                        }
+                                        Ok(Err(e)) => {
+                                            eprintln!("Auto-format failed, using raw text: {e}");
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Auto-format task failed, using raw text: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Auto-append space if enabled
                         if *state.auto_space.lock().unwrap() {
                             text.push(' ');
@@ -334,6 +412,80 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                             if let Some(enabled) = msg.get("enabled").and_then(|v| v.as_bool()) {
                                 *state.auto_space.lock().unwrap() = enabled;
                                 eprintln!("Auto-space set to {enabled} (from phone)");
+                            }
+                        }
+                        Some("check_llm_model") => {
+                            let has = crate::model_manager::has_llm_model();
+                            let _ = socket
+                                .send(Message::Text(
+                                    serde_json::json!({"type": "setting", "key": "has_llm_model", "value": has})
+                                        .to_string()
+                                        .into(),
+                                ))
+                                .await;
+                        }
+                        Some("download_model") => {
+                            let _ = socket
+                                .send(Message::Text(
+                                    serde_json::json!({"type": "download_status", "state": "downloading"})
+                                        .to_string()
+                                        .into(),
+                                ))
+                                .await;
+
+                            // We need a reference to socket inside the async download,
+                            // but we can't share it. Instead, poll from the download
+                            // callback via an atomic and forward progress in a loop.
+                            let progress_pct = Arc::new(AtomicI32::new(0));
+                            let progress_clone = progress_pct.clone();
+
+                            let mut dl_handle = tokio::spawn(async move {
+                                crate::model_manager::download_model("phi3-mini", move |dl, total| {
+                                    let pct = if total > 0 { (dl as f64 / total as f64 * 100.0) as i32 } else { 0 };
+                                    progress_clone.store(pct, Ordering::Relaxed);
+                                })
+                                .await
+                            });
+
+                            let mut last_pct = -1i32;
+                            let result = loop {
+                                tokio::select! {
+                                    res = &mut dl_handle => { break res; }
+                                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                                        let pct = progress_pct.load(Ordering::Relaxed);
+                                        if pct != last_pct {
+                                            last_pct = pct;
+                                            let _ = socket.send(Message::Text(
+                                                serde_json::json!({"type": "download_progress", "percent": pct}).to_string().into(),
+                                            )).await;
+                                        }
+                                    }
+                                }
+                            };
+
+                            match result {
+                                Ok(Ok(_)) => {
+                                    let _ = socket.send(Message::Text(
+                                        serde_json::json!({"type": "download_status", "state": "complete"}).to_string().into(),
+                                    )).await;
+                                }
+                                _ => {
+                                    let _ = socket.send(Message::Text(
+                                        serde_json::json!({"type": "download_status", "state": "failed"}).to_string().into(),
+                                    )).await;
+                                }
+                            }
+                        }
+                        Some("set_auto_format") => {
+                            if let Some(enabled) = msg.get("enabled").and_then(|v| v.as_bool()) {
+                                *state.auto_format.lock().unwrap() = enabled;
+                                eprintln!("Auto-format set to {enabled} (from phone)");
+                            }
+                        }
+                        Some("set_auto_format_type") => {
+                            if let Some(val) = msg.get("value").and_then(|v| v.as_str()) {
+                                *state.auto_format_type.lock().unwrap() = val.to_string();
+                                eprintln!("Auto-format type set to {val} (from phone)");
                             }
                         }
                         Some("key") => {

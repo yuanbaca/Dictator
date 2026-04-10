@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DeskMic</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -11,12 +11,14 @@
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: #1a1a2e;
       color: #eee;
-      height: 100dvh;
+      min-height: 100dvh;
       display: flex;
       flex-direction: column;
       user-select: none;
       -webkit-user-select: none;
-      overflow: hidden;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
     }
 
     .header {
@@ -59,9 +61,9 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: safe center;
       padding: 24px;
-      gap: 28px;
+      gap: 20px;
     }
 
     .mic-button {
@@ -222,6 +224,23 @@
 
     .setting-row label { color: #999; }
 
+    .setting-row select {
+      background: #1a1a2e;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      max-width: 160px;
+    }
+
+    .setting-hint {
+      font-size: 11px;
+      color: #666;
+      padding: 0 12px;
+      margin-top: -6px;
+    }
+
     .toggle {
       position: relative;
       width: 40px;
@@ -281,6 +300,23 @@
       <label>Add space after insert</label>
       <div class="toggle on" id="autoSpaceToggle"></div>
     </div>
+    <div class="setting-row">
+      <label>Auto-format with AI</label>
+      <div class="toggle" id="autoFormatToggle"></div>
+    </div>
+    <div id="autoFormatExtra" style="display:none;">
+      <div class="setting-hint">Adds 5-15 sec processing time</div>
+      <div class="setting-row" style="margin-top:6px;">
+        <label>Format style</label>
+        <select id="autoFormatType">
+          <option value="clean_up">Clean up</option>
+          <option value="email">Email</option>
+          <option value="meeting_notes">Meeting notes</option>
+          <option value="documentation">Documentation</option>
+          <option value="message">Message</option>
+        </select>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toastMsg"></div>
@@ -306,17 +342,21 @@
     const progressFill = document.getElementById('progressFill');
 
     // --- Animated progress bar ---
-    // Estimates completion time from audio duration so the bar visibly fills,
-    // even when Whisper finishes nearly instantly on fast hardware.
+    // Two-phase: Whisper transcription fills to ~50% (or ~90% without LLM),
+    // then LLM formatting fills from ~50% to ~90%. completeProgress() finishes to 100%.
     let progressAnimFrame = null;
     let progressCurrent = 0;
     let progressTarget = 90;
     let lastAudioDurationSec = 0;
 
+    function isAutoFormatOn() {
+      return document.getElementById('autoFormatToggle').classList.contains('on');
+    }
+
     function startAnimatedProgress(audioDurationSec) {
       const estimatedMs = Math.max(audioDurationSec * 300, 1500);
       progressCurrent = 0;
-      progressTarget = 90;
+      progressTarget = isAutoFormatOn() ? 45 : 90;
       progressBar.classList.remove('done');
       progressFill.style.transition = 'none';
       progressFill.style.width = '0%';
@@ -324,8 +364,26 @@
       function animate(now) {
         const elapsed = now - startTime;
         const fraction = Math.min(elapsed / estimatedMs, 1);
-        const eased = 1 - Math.pow(1 - fraction, 3); // ease-out: fast start, slows down
+        const eased = 1 - Math.pow(1 - fraction, 3);
         const pct = eased * progressTarget;
+        if (pct > progressCurrent) progressCurrent = pct;
+        progressFill.style.width = progressCurrent + '%';
+        if (fraction < 1) progressAnimFrame = requestAnimationFrame(animate);
+      }
+      progressAnimFrame = requestAnimationFrame(animate);
+    }
+
+    function startFormattingProgress() {
+      if (progressAnimFrame) { cancelAnimationFrame(progressAnimFrame); progressAnimFrame = null; }
+      const fromPct = progressCurrent;
+      progressTarget = 90;
+      const estimatedMs = 8000;
+      const startTime = performance.now();
+      function animate(now) {
+        const elapsed = now - startTime;
+        const fraction = Math.min(elapsed / estimatedMs, 1);
+        const eased = 1 - Math.pow(1 - fraction, 3);
+        const pct = fromPct + eased * (progressTarget - fromPct);
         if (pct > progressCurrent) progressCurrent = pct;
         progressFill.style.width = progressCurrent + '%';
         if (fraction < 1) progressAnimFrame = requestAnimationFrame(animate);
@@ -444,11 +502,41 @@
         } else if (msg.type === 'progress') {
           onServerProgress(msg.percent);
         } else if (msg.type === 'setting' && msg.key === 'auto_space') {
-          // Sync toggle with desktop setting
           if (msg.value) {
             autoSpaceToggle.classList.add('on');
           } else {
             autoSpaceToggle.classList.remove('on');
+          }
+        } else if (msg.type === 'setting' && msg.key === 'auto_format') {
+          if (msg.value) {
+            autoFormatToggle.classList.add('on');
+            autoFormatExtra.style.display = '';
+          } else {
+            autoFormatToggle.classList.remove('on');
+            autoFormatExtra.style.display = 'none';
+          }
+        } else if (msg.type === 'setting' && msg.key === 'auto_format_type') {
+          autoFormatType.value = msg.value;
+        } else if (msg.type === 'status' && msg.state === 'formatting') {
+          setStatus('transcribing', 'AI formatting...');
+          micHint.textContent = 'Formatting with AI...';
+          startFormattingProgress();
+        } else if (msg.type === 'setting' && msg.key === 'has_llm_model') {
+          if (!msg.value) {
+            // No model — trigger download
+            showToast('Downloading AI model (first time only)...', 'hint');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'download_model' }));
+            }
+          }
+        } else if (msg.type === 'download_progress') {
+          micHint.textContent = 'Downloading AI model... ' + msg.percent + '%';
+        } else if (msg.type === 'download_status') {
+          if (msg.state === 'complete') {
+            showToast('AI model ready!', 'hint');
+            micHint.textContent = 'Tap to start recording';
+          } else if (msg.state === 'failed') {
+            showToast('Model download failed', 'error');
           }
         }
       };
@@ -592,6 +680,28 @@
       const isOn = autoSpaceToggle.classList.toggle('on');
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'set_auto_space', enabled: isOn }));
+      }
+    });
+
+    // --- Auto-format toggle ---
+    const autoFormatToggle = document.getElementById('autoFormatToggle');
+    const autoFormatExtra = document.getElementById('autoFormatExtra');
+    const autoFormatType = document.getElementById('autoFormatType');
+
+    autoFormatToggle.addEventListener('click', () => {
+      const isOn = autoFormatToggle.classList.toggle('on');
+      autoFormatExtra.style.display = isOn ? '' : 'none';
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'set_auto_format', enabled: isOn }));
+        if (isOn) {
+          ws.send(JSON.stringify({ type: 'check_llm_model' }));
+        }
+      }
+    });
+
+    autoFormatType.addEventListener('change', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'set_auto_format_type', value: autoFormatType.value }));
       }
     });
 
