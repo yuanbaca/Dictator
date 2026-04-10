@@ -1072,6 +1072,42 @@
     let rawText = '';     // original whisper output, preserved for re-formatting
     let hotkeyTriggered = false;
 
+    // ── Global Escape shortcut management ───────────────────────────────
+    // Escape is registered as a global hotkey only while recording or TTS
+    // is active, so it doesn't interfere with other apps.
+    let escapeRegistered = false;
+    async function updateEscapeShortcut() {
+      const needEscape = isRecording || ttsState !== 'idle';
+      if (needEscape && !escapeRegistered) {
+        try { await invoke('register_escape_shortcut'); escapeRegistered = true; } catch (_) {}
+      } else if (!needEscape && escapeRegistered) {
+        try { await invoke('unregister_escape_shortcut'); escapeRegistered = false; } catch (_) {}
+      }
+    }
+
+    async function handleEscapeAction() {
+      if (isRecording) {
+        try { await invoke('cancel_recording'); } catch (_) {}
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        if (recTimerInterval) clearInterval(recTimerInterval);
+        recTimerInterval = null;
+        recTimerEl.textContent = '';
+        recTimerEl.classList.remove('warning');
+        progressFill.style.width = '0%';
+        setStatus('ready', 'Ready — click the mic to record');
+        micHint.textContent = 'Recording cancelled';
+        soundError();
+        setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
+        updateEscapeShortcut();
+        return;
+      }
+      if (ttsState !== 'idle') {
+        try { await invoke('stop_tts'); } catch (_) {}
+        return;
+      }
+    }
+
     // ── Animated Progress Bar ───────────────────────────────────────────
     let progressAnimFrame = null;
     let progressCurrent = 0;
@@ -1389,6 +1425,7 @@
         try {
           await invoke('start_recording');
           isRecording = true;
+          updateEscapeShortcut();
           soundRecordStart();
           recordingStartTime = Date.now();
           micBtn.classList.add('recording');
@@ -1402,6 +1439,7 @@
         }
       } else {
         isRecording = false;
+        updateEscapeShortcut();
         micBtn.classList.remove('recording');
         micBtn.classList.add('disabled');
         micHint.textContent = 'Transcribing...';
@@ -1883,6 +1921,7 @@
 
     listen('tts-state', (event) => {
       ttsState = event.payload;
+      updateEscapeShortcut();
       if (ttsState === 'speaking') {
         setStatus('ready', '🔊 Speaking...');
         micBtn.classList.add('disabled');
@@ -1911,33 +1950,12 @@
     });
 
     // ── Escape key to cancel recording / stop TTS ──────────────────────
-    document.addEventListener('keydown', async (e) => {
-      if (e.key === 'Escape') {
-        // Cancel recording if active
-        if (micBtn.classList.contains('recording')) {
-          try {
-            await invoke('cancel_recording');
-          } catch (_) {}
-          isRecording = false;
-          micBtn.classList.remove('recording');
-          if (recTimerInterval) clearInterval(recTimerInterval);
-          recTimerInterval = null;
-          recTimerEl.textContent = '';
-          recTimerEl.classList.remove('warning');
-          progressFill.style.width = '0%';
-          setStatus('ready', 'Ready — click the mic to record');
-          micHint.textContent = 'Recording cancelled';
-          soundError();
-          setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
-          return;
-        }
-        // Stop TTS if playing
-        if (ttsState !== 'idle') {
-          try { await invoke('stop_tts'); } catch (_) {}
-          return;
-        }
-      }
+    // DOM keydown (works when window focused)
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') handleEscapeAction();
     });
+    // Global shortcut (works when window unfocused — registered dynamically)
+    listen('escape-pressed', () => handleEscapeAction());
 
     // ── Tray event listeners ──────────────────────────────────────────────
     // Tray tried to enable auto-format but no LLM model exists — open settings and download
@@ -1983,22 +2001,7 @@
     });
 
     // Tray "Cancel Recording" menu item
-    listen('cancel-recording', async () => {
-      if (micBtn.classList.contains('recording')) {
-        try { await invoke('cancel_recording'); } catch (_) {}
-        isRecording = false;
-        micBtn.classList.remove('recording');
-        if (recTimerInterval) clearInterval(recTimerInterval);
-        recTimerInterval = null;
-        recTimerEl.textContent = '';
-        recTimerEl.classList.remove('warning');
-        progressFill.style.width = '0%';
-        setStatus('ready', 'Ready — click the mic to record');
-        micHint.textContent = 'Recording cancelled';
-        soundError();
-        setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
-      }
-    });
+    listen('cancel-recording', () => handleEscapeAction());
 
     const soundToggle = document.getElementById('soundToggle');
     if (soundEnabled) soundToggle.classList.add('on');
@@ -2306,6 +2309,15 @@
       try {
         const msg = await invoke('refresh_tailscale');
         showHint(msg);
+        // Explicitly fetch and display the URL (event may have fired before listener was ready)
+        try {
+          const tsUrl = await invoke('get_tailscale_url');
+          if (tsUrl) {
+            tailscaleUrlEl.textContent = tsUrl;
+            tailscaleSectionEl.style.display = '';
+            certHelp.innerHTML = 'LAN requires accepting a security warning on your phone. Tailscale works with no warnings.';
+          }
+        } catch (_) {}
         // Show cert expiry info
         try {
           const status = await invoke('get_tailscale_status');

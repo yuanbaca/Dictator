@@ -378,6 +378,34 @@ fn cancel_recording(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Dynamically register Escape as a global shortcut (while recording/TTS).
+#[tauri::command]
+fn register_escape_shortcut(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
+    let sc = Shortcut::new(None, Code::Escape);
+    if app_handle.global_shortcut().is_registered(sc) {
+        return Ok(());
+    }
+    app_handle
+        .global_shortcut()
+        .register(sc)
+        .map_err(|e| format!("{e}"))
+}
+
+/// Unregister the Escape global shortcut (when nothing to cancel).
+#[tauri::command]
+fn unregister_escape_shortcut(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
+    let sc = Shortcut::new(None, Code::Escape);
+    if !app_handle.global_shortcut().is_registered(sc) {
+        return Ok(());
+    }
+    app_handle
+        .global_shortcut()
+        .unregister(sc)
+        .map_err(|e| format!("{e}"))
+}
+
 #[tauri::command]
 fn inject_text(state: State<AppState>, text: String) -> Result<(), String> {
     let mode_str = state.injection_mode.lock().unwrap().clone();
@@ -1121,6 +1149,14 @@ fn main() {
                 .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         if let Some(win) = app.get_webview_window("main") {
+                            // Check if this is the dynamically registered Escape key
+                            use tauri_plugin_global_shortcut::{Code, Shortcut as GShortcut};
+                            let escape_sc = GShortcut::new(None, Code::Escape);
+                            if *shortcut == escape_sc {
+                                let _ = win.emit("escape-pressed", ());
+                                return;
+                            }
+
                             let state = app.try_state::<AppState>();
                             let inject_key = state.as_ref().and_then(|s| {
                                 parse_hotkey_preset(&s.inject_hotkey.lock().unwrap())
@@ -1193,6 +1229,8 @@ fn main() {
             start_recording,
             stop_and_transcribe,
             cancel_recording,
+            register_escape_shortcut,
+            unregister_escape_shortcut,
             inject_text,
             set_injection_mode,
             get_autostart,
