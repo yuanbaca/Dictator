@@ -682,6 +682,24 @@
         </div>
 
         <div class="setting-group">
+          <label>Read aloud hotkey</label>
+          <select id="ttsHotkeySelect">
+            <option value="none">Disabled</option>
+            <option value="Ctrl+Shift+R">Ctrl + Shift + R</option>
+            <option value="Ctrl+Shift+T">Ctrl + Shift + T</option>
+            <option value="F11">F11</option>
+          </select>
+        </div>
+        <div id="ttsHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
+          Highlight text anywhere, press hotkey to hear it read aloud
+        </div>
+
+        <div id="ttsVoiceGroup" class="setting-group" style="display:none;">
+          <label>Voice</label>
+          <select id="ttsVoiceSelect"></select>
+        </div>
+
+        <div class="setting-group">
           <label>Microphone</label>
           <select id="micDevice">
             <option value="">System default</option>
@@ -1135,6 +1153,20 @@
           showError(event.payload);
         }
       });
+
+      // Fallback: if model-ready event fired before listener was registered,
+      // poll get_status to catch up
+      try {
+        const status = await invoke('get_status');
+        if (status === 'ready') {
+          setStatus('ready', 'Ready \u2014 click the mic to record');
+          micBtn.classList.remove('disabled');
+          micHint.textContent = 'Click to start recording';
+        } else if (status.startsWith('error:')) {
+          setStatus('loading', 'Model failed to load');
+          showError(status.slice(6));
+        }
+      } catch (e) { /* ignore */ }
     }
 
     // ── Status ──────────────────────────────────────────────────────────
@@ -1472,6 +1504,60 @@
     // Listen for inject-at-cursor hotkey event
     listen('inject-at-cursor', () => { doInject(); });
 
+    // ── TTS Read Aloud ─────────────────────────────────────────────────
+    const ttsHotkeySelect = document.getElementById('ttsHotkeySelect');
+    const ttsHint = document.getElementById('ttsHint');
+    const ttsVoiceGroup = document.getElementById('ttsVoiceGroup');
+    const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
+
+    function updateTtsUI() {
+      const enabled = ttsHotkeySelect.value !== 'none';
+      ttsHint.style.display = enabled ? '' : 'none';
+      ttsVoiceGroup.style.display = enabled ? '' : 'none';
+      if (enabled) loadTtsVoices();
+    }
+
+    async function loadTtsVoices() {
+      try {
+        const voices = await invoke('list_tts_voices');
+        const saved = localStorage.getItem('deskmic-tts-voice') || '';
+        ttsVoiceSelect.innerHTML = '';
+        for (const v of voices) {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          if (v === saved) opt.selected = true;
+          ttsVoiceSelect.appendChild(opt);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    ttsHotkeySelect.addEventListener('change', async () => {
+      try {
+        await invoke('set_tts_hotkey', { preset: ttsHotkeySelect.value });
+        localStorage.setItem('deskmic-tts-hotkey', ttsHotkeySelect.value);
+        updateTtsUI();
+      } catch (e) {
+        showError('Read aloud hotkey failed: ' + e);
+      }
+    });
+
+    ttsVoiceSelect.addEventListener('change', async () => {
+      try {
+        await invoke('set_tts_voice', { name: ttsVoiceSelect.value });
+        localStorage.setItem('deskmic-tts-voice', ttsVoiceSelect.value);
+      } catch (e) { /* ignore */ }
+    });
+
+    // Listen for read-aloud hotkey event
+    listen('tts-read-aloud', async () => {
+      try {
+        await invoke('read_selected_text');
+      } catch (e) {
+        showError('Read aloud: ' + e);
+      }
+    });
+
     const soundToggle = document.getElementById('soundToggle');
     if (soundEnabled) soundToggle.classList.add('on');
     soundToggle.addEventListener('click', () => {
@@ -1697,6 +1783,23 @@
         try {
           await invoke('set_inject_hotkey', { preset: savedInject });
         } catch (e) { /* ignore */ }
+      }
+
+      const savedTts = localStorage.getItem('deskmic-tts-hotkey') || 'none';
+      ttsHotkeySelect.value = savedTts;
+      updateTtsUI();
+      if (savedTts !== 'none') {
+        try {
+          await invoke('set_tts_hotkey', { preset: savedTts });
+        } catch (e) { /* ignore */ }
+
+        // Restore saved voice
+        const savedVoice = localStorage.getItem('deskmic-tts-voice');
+        if (savedVoice) {
+          try {
+            await invoke('set_tts_voice', { name: savedVoice });
+          } catch (e) { /* ignore */ }
+        }
       }
     }
 

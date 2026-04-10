@@ -8,6 +8,7 @@ use deskmic::server;
 use deskmic::tailscale;
 use deskmic::templates::FormatType;
 use deskmic::transcription;
+use deskmic::tts;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,6 +43,10 @@ struct AppState {
     hotkey: Mutex<String>,
     /// Inject-at-cursor hotkey preset
     inject_hotkey: Mutex<String>,
+    /// Read-aloud hotkey preset
+    tts_hotkey: Mutex<String>,
+    /// TTS speaker (lazy-loaded on first speak)
+    speaker: Arc<Mutex<Option<tts::Speaker>>>,
     /// LLM formatter (lazy-loaded on first format request)
     formatter: Arc<Mutex<Option<llm::Formatter>>>,
     /// LLM status: None = not loaded, Some(true) = loaded, Some(false) = failed
@@ -273,6 +278,7 @@ fn register_all_hotkeys(
     app_handle: &tauri::AppHandle,
     rec_preset: &str,
     inject_preset: &str,
+    tts_preset: &str,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -290,7 +296,20 @@ fn register_all_hotkeys(
             .register(sc)
             .map_err(|e| format!("Failed to register inject hotkey: {e}"))?;
     }
+    if let Some(sc) = parse_hotkey_preset(tts_preset) {
+        app_handle
+            .global_shortcut()
+            .register(sc)
+            .map_err(|e| format!("Failed to register read-aloud hotkey: {e}"))?;
+    }
     Ok(())
+}
+
+fn get_all_hotkey_presets(state: &AppState) -> (String, String, String) {
+    let rec = state.hotkey.lock().unwrap().clone();
+    let inject = state.inject_hotkey.lock().unwrap().clone();
+    let tts = state.tts_hotkey.lock().unwrap().clone();
+    (rec, inject, tts)
 }
 
 #[tauri::command]
@@ -299,8 +318,8 @@ fn set_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let inject = state.inject_hotkey.lock().unwrap().clone();
-    register_all_hotkeys(&app_handle, &preset, &inject)?;
+    let (_, inject, tts) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &preset, &inject, &tts)?;
     *state.hotkey.lock().unwrap() = preset;
     Ok(())
 }
@@ -311,9 +330,26 @@ fn set_inject_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let rec = state.hotkey.lock().unwrap().clone();
-    register_all_hotkeys(&app_handle, &rec, &preset)?;
+    let (rec, _, tts) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &preset, &tts)?;
     *state.inject_hotkey.lock().unwrap() = preset;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_tts_hotkey(state: State<AppState>) -> String {
+    state.tts_hotkey.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_tts_hotkey(
+    app_handle: tauri::AppHandle,
+    state: State<AppState>,
+    preset: String,
+) -> Result<(), String> {
+    let (rec, inject, _) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &inject, &preset)?;
+    *state.tts_hotkey.lock().unwrap() = preset;
     Ok(())
 }
 
@@ -346,6 +382,15 @@ fn parse_hotkey_preset(
         )),
         "F10" => Some(Shortcut::new(None, Code::F10)),
         "Ctrl+F10" => Some(Shortcut::new(Some(Modifiers::CONTROL), Code::F10)),
+        "Ctrl+Shift+R" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyR,
+        )),
+        "Ctrl+Shift+T" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyT,
+        )),
+        "F11" => Some(Shortcut::new(None, Code::F11)),
         _ => None,
     }
 }
@@ -508,6 +553,73 @@ fn get_models_dir() -> String {
         .to_string()
 }
 
+// ── TTS commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn speak_text(state: State<AppState>, text: String) -> Result<(), String> {
+    let mut speaker_guard = state.speaker.lock().unwrap();
+    if speaker_guard.is_none() {
+        *speaker_guard = Some(tts::Speaker::new()?);
+    }
+    speaker_guard.as_ref().unwrap().speak(&text)
+}
+
+#[tauri::command]
+fn stop_speaking(state: State<AppState>) -> Result<(), String> {
+    let speaker_guard = state.speaker.lock().unwrap();
+    if let Some(speaker) = speaker_guard.as_ref() {
+        speaker.stop()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn read_selected_text(state: State<AppState>) -> Result<(), String> {
+    // Toggle: if already speaking, stop instead of reading new text
+    {
+        let speaker_guard = state.speaker.lock().unwrap();
+        if let Some(speaker) = speaker_guard.as_ref() {
+            if speaker.is_speaking() {
+                return speaker.stop();
+            }
+        }
+    }
+
+    let text = tts::capture_selected_text()?;
+    let mut speaker_guard = state.speaker.lock().unwrap();
+    if speaker_guard.is_none() {
+        *speaker_guard = Some(tts::Speaker::new()?);
+    }
+    speaker_guard.as_ref().unwrap().speak(&text)
+}
+
+#[tauri::command]
+fn list_tts_voices(state: State<AppState>) -> Result<Vec<String>, String> {
+    let mut speaker_guard = state.speaker.lock().unwrap();
+    if speaker_guard.is_none() {
+        *speaker_guard = Some(tts::Speaker::new()?);
+    }
+    Ok(speaker_guard.as_ref().unwrap().list_voices())
+}
+
+#[tauri::command]
+fn set_tts_voice(state: State<AppState>, name: String) -> Result<(), String> {
+    let mut speaker_guard = state.speaker.lock().unwrap();
+    if speaker_guard.is_none() {
+        *speaker_guard = Some(tts::Speaker::new()?);
+    }
+    speaker_guard.as_ref().unwrap().set_voice(&name)
+}
+
+#[tauri::command]
+fn set_tts_rate(state: State<AppState>, rate: f32) -> Result<(), String> {
+    let mut speaker_guard = state.speaker.lock().unwrap();
+    if speaker_guard.is_none() {
+        *speaker_guard = Some(tts::Speaker::new()?);
+    }
+    speaker_guard.as_ref().unwrap().set_rate(rate)
+}
+
 // ── LLM Formatting commands ─────────────────────────────────────────────
 
 #[tauri::command]
@@ -655,15 +767,18 @@ fn main() {
                 .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         if let Some(win) = app.get_webview_window("main") {
-                            // Check if this is the inject hotkey
-                            let inject_key = app
-                                .try_state::<AppState>()
-                                .and_then(|s| {
-                                    let preset = s.inject_hotkey.lock().unwrap().clone();
-                                    parse_hotkey_preset(&preset)
-                                });
+                            let state = app.try_state::<AppState>();
+                            let inject_key = state.as_ref().and_then(|s| {
+                                parse_hotkey_preset(&s.inject_hotkey.lock().unwrap())
+                            });
+                            let tts_key = state.as_ref().and_then(|s| {
+                                parse_hotkey_preset(&s.tts_hotkey.lock().unwrap())
+                            });
+
                             if inject_key.is_some_and(|k| k == *shortcut) {
                                 let _ = win.emit("inject-at-cursor", ());
+                            } else if tts_key.is_some_and(|k| k == *shortcut) {
+                                let _ = win.emit("tts-read-aloud", ());
                             } else {
                                 let _ = win.emit("toggle-recording", ());
                             }
@@ -686,6 +801,8 @@ fn main() {
             selected_device: selected_device.clone(),
             hotkey: Mutex::new("Ctrl+Shift+Space".into()),
             inject_hotkey: Mutex::new("none".into()),
+            tts_hotkey: Mutex::new("none".into()),
+            speaker: Arc::new(Mutex::new(None)),
             formatter: formatter.clone(),
             llm_status: Arc::new(Mutex::new(None)),
             llm_error: Mutex::new(None),
@@ -713,6 +830,14 @@ fn main() {
             set_hotkey,
             get_inject_hotkey,
             set_inject_hotkey,
+            get_tts_hotkey,
+            set_tts_hotkey,
+            speak_text,
+            stop_speaking,
+            read_selected_text,
+            list_tts_voices,
+            set_tts_voice,
+            set_tts_rate,
             list_formats,
             get_llm_status,
             format_text,

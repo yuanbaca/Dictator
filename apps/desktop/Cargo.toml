@@ -60,6 +60,9 @@ futures-util = "0.3"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rcgen = "0.13"
 
+# Text-to-speech (Windows SAPI)
+tts = "0.26"
+
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"

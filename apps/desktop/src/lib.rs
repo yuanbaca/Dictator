@@ -6,3 +6,4 @@ pub mod tailscale;
 pub mod llm;
 pub mod model_manager;
 pub mod templates;
+pub mod tts;
