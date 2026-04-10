@@ -27,6 +27,8 @@ struct AppState {
     recording: Mutex<Option<RecordingSession>>,
     injection_mode: Arc<Mutex<String>>,
     auto_space: Arc<Mutex<bool>>,
+    auto_format: Arc<Mutex<bool>>,
+    auto_format_type: Arc<Mutex<String>>,
     model_error: Mutex<Option<String>>,
     server_url: Mutex<Option<String>>,
     connected_phones: Arc<Mutex<u32>>,
@@ -254,6 +256,26 @@ fn get_auto_space(state: State<AppState>) -> bool {
 #[tauri::command]
 fn set_auto_space(state: State<AppState>, enabled: bool) {
     *state.auto_space.lock().unwrap() = enabled;
+}
+
+#[tauri::command]
+fn get_auto_format(state: State<AppState>) -> bool {
+    *state.auto_format.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_auto_format(state: State<AppState>, enabled: bool) {
+    *state.auto_format.lock().unwrap() = enabled;
+}
+
+#[tauri::command]
+fn get_auto_format_type(state: State<AppState>) -> String {
+    state.auto_format_type.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_auto_format_type(state: State<AppState>, format_type: String) {
+    *state.auto_format_type.lock().unwrap() = format_type;
 }
 
 #[tauri::command]
@@ -1124,6 +1146,8 @@ fn main() {
             recording: Mutex::new(None),
             injection_mode: injection_mode.clone(),
             auto_space: auto_space.clone(),
+            auto_format: auto_format.clone(),
+            auto_format_type: auto_format_type.clone(),
             model_error: Mutex::new(None),
             server_url: Mutex::new(Some(lan_url)),
             connected_phones: connected_phones.clone(),
@@ -1158,6 +1182,10 @@ fn main() {
             get_tailscale_status,
             get_auto_space,
             set_auto_space,
+            get_auto_format,
+            set_auto_format,
+            get_auto_format_type,
+            set_auto_format_type,
             get_gpu_status,
             list_audio_devices,
             get_selected_device,
@@ -1393,20 +1421,63 @@ fn main() {
                 });
             });
 
-            // ── System tray — hides to tray on close, quit from menu ───
-            let show_item =
-                tauri::menu::MenuItem::with_id(app, "show", "Show Dictator", true, None::<&str>)?;
-            let quit_item =
-                tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray_menu =
-                tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+            // ── System tray — auto-format toggle, cancel recording, show/quit ───
+            use tauri::menu::PredefinedMenuItem;
 
+            let autoformat_item = tauri::menu::MenuItem::with_id(
+                app, "autoformat", "Auto Format: Off", true, None::<&str>,
+            )?;
+            let fmt_clean = tauri::menu::MenuItem::with_id(app, "fmt_clean_up", "  ✓ Clean Up", true, None::<&str>)?;
+            let fmt_email = tauri::menu::MenuItem::with_id(app, "fmt_email", "  Email", true, None::<&str>)?;
+            let fmt_notes = tauri::menu::MenuItem::with_id(app, "fmt_meeting_notes", "  Meeting Notes", true, None::<&str>)?;
+            let fmt_docs = tauri::menu::MenuItem::with_id(app, "fmt_documentation", "  Documentation", true, None::<&str>)?;
+            let fmt_msg = tauri::menu::MenuItem::with_id(app, "fmt_message", "  Message", true, None::<&str>)?;
+
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let cancel_rec_item = tauri::menu::MenuItem::with_id(
+                app, "cancel_recording", "Cancel Recording", true, None::<&str>,
+            )?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let show_item = tauri::menu::MenuItem::with_id(app, "show", "Show Dictator", true, None::<&str>)?;
+            let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+
+            let tray_menu = tauri::menu::Menu::with_items(app, &[
+                &autoformat_item,
+                &fmt_clean, &fmt_email, &fmt_notes, &fmt_docs, &fmt_msg,
+                &sep1,
+                &cancel_rec_item,
+                &sep2,
+                &show_item,
+                &quit_item,
+            ])?;
+
+            let autoformat_item2 = autoformat_item.clone();
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("Missing app icon").clone())
                 .tooltip("Dictator")
                 .menu(&tray_menu)
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
+                .on_menu_event(move |app, event| {
+                    let id = event.id().as_ref().to_string();
+                    match id.as_str() {
+                        "autoformat" => {
+                            // Toggle auto-format on/off
+                            let state: State<AppState> = app.state();
+                            let mut af = state.auto_format.lock().unwrap();
+                            *af = !*af;
+                            let enabled = *af;
+                            drop(af);
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.emit("autoformat-changed", enabled);
+                            }
+                            // Update tray label
+                            let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
+                            let _ = autoformat_item.set_text(label);
+                        }
+                        "cancel_recording" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.emit("cancel-recording", ());
+                            }
+                        }
                         "show" => {
                             if let Some(win) = app.get_webview_window("main") {
                                 let _ = win.show();
@@ -1416,10 +1487,43 @@ fn main() {
                         "quit" => {
                             app.exit(0);
                         }
+                        _ if id.starts_with("fmt_") => {
+                            // Format type selected
+                            let fmt_type = id.strip_prefix("fmt_").unwrap().to_string();
+                            let state: State<AppState> = app.state();
+                            *state.auto_format_type.lock().unwrap() = fmt_type.clone();
+                            // Also enable auto-format
+                            *state.auto_format.lock().unwrap() = true;
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.emit("autoformat-changed", true);
+                                let _ = win.emit("autoformat-type-changed", fmt_type.as_str());
+                            }
+                            let _ = autoformat_item.set_text("Auto Format: On");
+                            // Update checkmarks
+                            let types = [
+                                (&fmt_clean, "clean_up"),
+                                (&fmt_email, "email"),
+                                (&fmt_notes, "meeting_notes"),
+                                (&fmt_docs, "documentation"),
+                                (&fmt_msg, "message"),
+                            ];
+                            for (item, name) in &types {
+                                let prefix = if *name == fmt_type { "  ✓ " } else { "  " };
+                                let display = match *name {
+                                    "clean_up" => "Clean Up",
+                                    "email" => "Email",
+                                    "meeting_notes" => "Meeting Notes",
+                                    "documentation" => "Documentation",
+                                    "message" => "Message",
+                                    _ => name,
+                                };
+                                let _ = item.set_text(&format!("{prefix}{display}"));
+                            }
+                        }
                         _ => {}
                     }
                 })
-                .on_tray_icon_event(|tray, event| {
+                .on_tray_icon_event(move |tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
@@ -1427,10 +1531,17 @@ fn main() {
                     } = event
                     {
                         let app = tray.app_handle();
+                        // Left-click: toggle auto-format
+                        let state: State<AppState> = app.state();
+                        let mut af = state.auto_format.lock().unwrap();
+                        *af = !*af;
+                        let enabled = *af;
+                        drop(af);
                         if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
+                            let _ = win.emit("autoformat-changed", enabled);
                         }
+                        let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
+                        let _ = autoformat_item2.set_text(label);
                     }
                 })
                 .build(app)?;

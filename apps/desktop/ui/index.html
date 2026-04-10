@@ -1912,6 +1912,7 @@
           try {
             await invoke('cancel_recording');
           } catch (_) {}
+          isRecording = false;
           micBtn.classList.remove('recording');
           if (recTimerInterval) clearInterval(recTimerInterval);
           recTimerInterval = null;
@@ -1929,6 +1930,47 @@
           try { await invoke('stop_tts'); } catch (_) {}
           return;
         }
+      }
+    });
+
+    // ── Tray event listeners ──────────────────────────────────────────────
+    // Tray icon can toggle auto-format and select format types — sync to frontend
+    listen('autoformat-changed', async (event) => {
+      const enabled = event.payload;
+      autoFormatEnabled = enabled;
+      localStorage.setItem('dictator-autoformat', enabled);
+      if (enabled) {
+        autoFormatToggle.classList.add('on');
+      } else {
+        autoFormatToggle.classList.remove('on');
+      }
+      updateAutoFormatUI();
+      if (enabled) {
+        await ensureLlmModel();
+      }
+    });
+
+    listen('autoformat-type-changed', (event) => {
+      const fmtType = event.payload;
+      autoFormatType.value = fmtType;
+      localStorage.setItem('dictator-autoformat-type', fmtType);
+    });
+
+    // Tray "Cancel Recording" menu item
+    listen('cancel-recording', async () => {
+      if (micBtn.classList.contains('recording')) {
+        try { await invoke('cancel_recording'); } catch (_) {}
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        if (recTimerInterval) clearInterval(recTimerInterval);
+        recTimerInterval = null;
+        recTimerEl.textContent = '';
+        recTimerEl.classList.remove('warning');
+        progressFill.style.width = '0%';
+        setStatus('ready', 'Ready — click the mic to record');
+        micHint.textContent = 'Recording cancelled';
+        soundError();
+        setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
       }
     });
 
@@ -2005,13 +2047,18 @@
       localStorage.setItem('dictator-autoformat', autoFormatEnabled);
       updateAutoFormatUI();
 
+      // Sync to backend so tray and server stay in sync
+      try { await invoke('set_auto_format', { enabled: autoFormatEnabled }); } catch (_) {}
+      try { await invoke('set_auto_format_type', { formatType: autoFormatType.value }); } catch (_) {}
+
       if (autoFormatEnabled) {
         await ensureLlmModel();
       }
     });
 
-    autoFormatType.addEventListener('change', () => {
+    autoFormatType.addEventListener('change', async () => {
       localStorage.setItem('dictator-autoformat-type', autoFormatType.value);
+      try { await invoke('set_auto_format_type', { formatType: autoFormatType.value }); } catch (_) {}
     });
 
     const autostartToggle = document.getElementById('autostartToggle');
@@ -2082,6 +2129,12 @@
         } else {
           autoSpaceToggle.classList.remove('on');
         }
+      } catch (e) { /* ignore */ }
+
+      // Sync auto-format state from localStorage to backend (so tray stays in sync)
+      try {
+        await invoke('set_auto_format', { enabled: autoFormatEnabled });
+        await invoke('set_auto_format_type', { formatType: autoFormatType.value });
       } catch (e) { /* ignore */ }
 
       try {
