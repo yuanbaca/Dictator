@@ -9,7 +9,6 @@ use dictator::tailscale;
 use dictator::templates::FormatType;
 use dictator::transcription;
 use dictator::tts;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -506,6 +505,73 @@ fn list_llm_models() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
+fn list_whisper_models() -> Vec<serde_json::Value> {
+    model_manager::WHISPER_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "name": m.name,
+                "filename": m.filename,
+                "size_mb": m.size_bytes / 1_000_000,
+                "installed": model_manager::models_dir().join(m.filename).exists(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn download_whisper_model(
+    app_handle: tauri::AppHandle,
+    model_id: String,
+) -> Result<String, String> {
+    let handle = app_handle.clone();
+    model_manager::download_whisper_model(&model_id, move |downloaded, total| {
+        let pct = if total > 0 {
+            (downloaded as f64 / total as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        let _ = handle.emit("whisper-download-progress", serde_json::json!({
+            "downloaded": downloaded,
+            "total": total,
+            "percent": pct,
+        }));
+    })
+    .await
+    .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn load_whisper_model(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<(), String> {
+    let model_path = model_manager::find_whisper_model()
+        .ok_or("No whisper model found")?;
+
+    let transcriber_handle = state.transcriber.clone();
+    let gpu_handle = state.using_gpu.clone();
+
+    std::thread::spawn(move || {
+        eprintln!("Loading whisper model from: {}", model_path.display());
+        match transcription::Transcriber::new(&model_path) {
+            Ok(t) => {
+                let gpu = t.is_using_gpu();
+                *gpu_handle.lock().unwrap() = Some(gpu);
+                *transcriber_handle.lock().unwrap() = Some(t);
+                eprintln!("Model loaded successfully ({})", if gpu { "GPU" } else { "CPU" });
+                let _ = app_handle.emit("model-ready", "ok");
+            }
+            Err(e) => {
+                let msg = format!("Failed to load model: {e}");
+                eprintln!("{msg}");
+                let _ = app_handle.emit("model-ready", &msg);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 fn list_available_models() -> Vec<serde_json::Value> {
     model_manager::AVAILABLE_MODELS
         .iter()
@@ -813,7 +879,7 @@ fn format_text(
 // ── App entry point ─────────────────────────────────────────────────────
 
 fn main() {
-    let model_path = find_model_path();
+    let model_path = model_manager::find_whisper_model();
     let transcriber: Arc<Mutex<Option<transcription::Transcriber>>> = Arc::new(Mutex::new(None));
     let formatter: Arc<Mutex<Option<llm::Formatter>>> = Arc::new(Mutex::new(None));
     let injection_mode: Arc<Mutex<String>> = Arc::new(Mutex::new("paste".into()));
@@ -976,6 +1042,9 @@ fn main() {
             format_text,
             has_llm_model,
             list_llm_models,
+            list_whisper_models,
+            download_whisper_model,
+            load_whisper_model,
             list_available_models,
             download_llm_model,
             delete_llm_model,
@@ -988,31 +1057,36 @@ fn main() {
             let gpu_handle = using_gpu.clone();
             let app_handle = app.handle().clone();
 
-            // Load model in background
-            std::thread::spawn(move || {
-                eprintln!("Loading whisper model from: {}", model_path.display());
+            // Load model in background (or signal no model available)
+            if let Some(model_path) = model_path {
+                std::thread::spawn(move || {
+                    eprintln!("Loading whisper model from: {}", model_path.display());
 
-                match transcription::Transcriber::new(&model_path) {
-                    Ok(t) => {
-                        let gpu = t.is_using_gpu();
-                        *gpu_handle.lock().unwrap() = Some(gpu);
-                        *transcriber_handle.lock().unwrap() = Some(t);
-                        eprintln!(
-                            "Model loaded successfully ({})",
-                            if gpu { "GPU" } else { "CPU" }
-                        );
-                        let _ = app_handle.emit("model-ready", "ok");
+                    match transcription::Transcriber::new(&model_path) {
+                        Ok(t) => {
+                            let gpu = t.is_using_gpu();
+                            *gpu_handle.lock().unwrap() = Some(gpu);
+                            *transcriber_handle.lock().unwrap() = Some(t);
+                            eprintln!(
+                                "Model loaded successfully ({})",
+                                if gpu { "GPU" } else { "CPU" }
+                            );
+                            let _ = app_handle.emit("model-ready", "ok");
+                        }
+                        Err(e) => {
+                            *gpu_handle.lock().unwrap() = Some(false);
+                            let msg = format!("Failed to load model: {e}");
+                            eprintln!("{msg}");
+                            let _ = app_handle.emit("model-ready", &msg);
+                            let state: State<AppState> = app_handle.state();
+                            *state.model_error.lock().unwrap() = Some(msg);
+                        }
                     }
-                    Err(e) => {
-                        *gpu_handle.lock().unwrap() = Some(false);
-                        let msg = format!("Failed to load model: {e}");
-                        eprintln!("{msg}");
-                        let _ = app_handle.emit("model-ready", &msg);
-                        let state: State<AppState> = app_handle.state();
-                        *state.model_error.lock().unwrap() = Some(msg);
-                    }
-                }
-            });
+                });
+            } else {
+                eprintln!("No whisper model found — waiting for user to download one");
+                let _ = app_handle.emit("model-ready", "no-model");
+            }
 
             // Start the phone companion HTTPS servers
             // LAN on port 3456 (always, self-signed) + Tailscale on 3457 (if available)
@@ -1184,42 +1258,3 @@ fn main() {
         .expect("error while running Dictator");
 }
 
-fn find_model_path() -> PathBuf {
-    const MODEL: &str = "models/ggml-base.en.bin";
-
-    // Search relative to the working directory
-    let cwd_candidates = [
-        PathBuf::from(format!("../../{MODEL}")),
-        PathBuf::from(MODEL),
-        PathBuf::from(format!("../{MODEL}")),
-    ];
-
-    for p in &cwd_candidates {
-        if p.exists() {
-            eprintln!("Found model at: {}", p.display());
-            return p.clone();
-        }
-    }
-
-    // Search relative to the executable (works when double-clicking the exe)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let exe_candidates = [
-                exe_dir.join(format!("../../../../{MODEL}")), // from target/release/
-                exe_dir.join(format!("../../{MODEL}")),       // from apps/desktop/
-                exe_dir.join(format!("../{MODEL}")),
-                exe_dir.join(MODEL),                          // model next to exe
-            ];
-            for p in &exe_candidates {
-                if p.exists() {
-                    eprintln!("Found model at: {}", p.display());
-                    return p.clone();
-                }
-            }
-        }
-    }
-
-    eprintln!("WARNING: Could not find whisper model file!");
-    eprintln!("Place ggml-base.en.bin in the models/ folder at the project root.");
-    PathBuf::from(MODEL)
-}

@@ -30,15 +30,133 @@ pub const AVAILABLE_MODELS: &[ModelInfo] = &[
     },
 ];
 
+/// Whisper speech-to-text models available for download.
+pub const WHISPER_MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        id: "tiny-en",
+        name: "Tiny (English, fastest)",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+        filename: "ggml-tiny.en.bin",
+        size_bytes: 77_704_715,
+    },
+    ModelInfo {
+        id: "base-en",
+        name: "Base (English, recommended)",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+        filename: "ggml-base.en.bin",
+        size_bytes: 147_964_211,
+    },
+    ModelInfo {
+        id: "small-en",
+        name: "Small (English, higher accuracy)",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+        filename: "ggml-small.en.bin",
+        size_bytes: 487_601_967,
+    },
+    ModelInfo {
+        id: "medium-en",
+        name: "Medium (English, best accuracy)",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+        filename: "ggml-medium.en.bin",
+        size_bytes: 1_533_774_781,
+    },
+];
+
+/// Find the first installed Whisper model, preferring base > small > tiny > medium.
+pub fn find_whisper_model() -> Option<std::path::PathBuf> {
+    let dir = models_dir();
+    // Preference order: base (good balance), small, tiny, medium, then any .bin
+    let preferred = ["ggml-base.en.bin", "ggml-small.en.bin", "ggml-tiny.en.bin", "ggml-medium.en.bin"];
+    for name in &preferred {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // Check for any whisper model file
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("ggml-") && name.ends_with(".bin") {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Download a Whisper model by its ID.
+pub async fn download_whisper_model<F>(
+    model_id: &str,
+    on_progress: F,
+) -> Result<PathBuf, String>
+where
+    F: Fn(u64, u64) + Send + 'static,
+{
+    let model = WHISPER_MODELS
+        .iter()
+        .find(|m| m.id == model_id)
+        .ok_or_else(|| format!("Unknown whisper model: {model_id}"))?;
+
+    let dir = models_dir();
+    let dest = dir.join(model.filename);
+    let temp = dir.join(format!("{}.part", model.filename));
+
+    eprintln!("Downloading whisper model {} to {}", model.name, dest.display());
+
+    let response = reqwest::get(model.url)
+        .await
+        .map_err(|e| format!("Download request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Download failed: HTTP {}", response.status()));
+    }
+
+    let total = response.content_length().unwrap_or(model.size_bytes);
+
+    let mut file = tokio::fs::File::create(&temp)
+        .await
+        .map_err(|e| format!("Failed to create file: {e}"))?;
+
+    let mut stream = response.bytes_stream();
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download error: {e}"))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("Write error: {e}"))?;
+        downloaded += chunk.len() as u64;
+        on_progress(downloaded, total);
+    }
+
+    file.flush().await.map_err(|e| format!("Flush error: {e}"))?;
+    drop(file);
+
+    tokio::fs::rename(&temp, &dest)
+        .await
+        .map_err(|e| format!("Rename error: {e}"))?;
+
+    eprintln!("Whisper model download complete: {}", dest.display());
+    Ok(dest)
+}
+
 /// Get the models directory path, creating it if needed.
+///
+/// Search order:
+///   1. Existing models/ dirs relative to exe (for dev builds with deep target/ paths)
+///   2. Existing models/ dirs relative to CWD
+///   3. Default: models/ next to the exe (stable for portable installs)
 pub fn models_dir() -> PathBuf {
-    // Try exe-relative first (for deployed builds)
+    // Try exe-relative first (for deployed and dev builds)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let candidates = [
-                exe_dir.join("../../../../models"),
+                exe_dir.join("../../../../models"), // from target/release/ in dev
                 exe_dir.join("../../models"),
-                exe_dir.join("models"),
+                exe_dir.join("models"),             // portable: models/ next to exe
             ];
             for c in &candidates {
                 if c.exists() {
@@ -59,7 +177,16 @@ pub fn models_dir() -> PathBuf {
         }
     }
 
-    // Default: create models/ relative to CWD
+    // Default: create models/ next to the exe (portable-friendly)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let default = exe_dir.join("models");
+            let _ = std::fs::create_dir_all(&default);
+            return default;
+        }
+    }
+
+    // Final fallback: CWD
     let default = PathBuf::from("models");
     let _ = std::fs::create_dir_all(&default);
     default

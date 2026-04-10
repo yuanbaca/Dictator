@@ -544,7 +544,7 @@
   <div class="header">
     <img src="dictatorhat.png" alt="Dictator" style="width:48px; height:48px; margin-bottom:4px;">
     <h1>Dictator</h1>
-    <div class="subtitle">Speak into your mic, text appears at your cursor</div>
+    <div class="subtitle">What you say goes... (to your cursor)</div>
     <button class="settings-btn" id="settingsBtn" title="Settings">&#x22EE;</button>
   </div>
 
@@ -555,6 +555,25 @@
   </div>
 
   <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+
+  <!-- First-run setup overlay (shown when no Whisper model is installed) -->
+  <div id="setupOverlay" style="display:none; position:fixed; inset:0; z-index:100; background:var(--bg); padding:24px; overflow-y:auto;">
+    <div style="max-width:360px; margin:0 auto;">
+      <div style="text-align:center; margin-bottom:20px;">
+        <img src="dictatorhat.png" alt="" style="width:48px; height:48px; margin-bottom:8px;">
+        <h2 style="font-size:18px; margin-bottom:4px;">Welcome to Dictator</h2>
+        <p style="font-size:13px; color:var(--text-dim);">Download a speech recognition model to get started.</p>
+      </div>
+      <div id="setupModelList" style="display:flex; flex-direction:column; gap:8px;"></div>
+      <div id="setupDownloadArea" style="display:none; margin-top:16px; padding:12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+        <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="setupDownloadLabel"></div>
+        <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+          <div id="setupDownloadFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
+        </div>
+        <div id="setupDownloadStatus" style="font-size:11px; color:var(--text-muted); margin-top:4px;"></div>
+      </div>
+    </div>
+  </div>
 
   <div class="main-area">
     <button class="mic-button disabled" id="micBtn" title="Click to record">
@@ -1171,9 +1190,17 @@
 
       await listen('model-ready', (event) => {
         if (event.payload === 'ok') {
+          document.getElementById('setupOverlay').style.display = 'none';
+          document.querySelector('.header').style.display = '';
+          clearInterval(pollStatus);
           setStatus('ready', 'Ready \u2014 click the mic to record');
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Click to start recording';
+        } else if (event.payload === 'no-model') {
+          clearInterval(pollStatus);
+          setStatus('loading', 'No speech model installed');
+          micHint.textContent = 'Download a model to get started';
+          showSetupOverlay();
         } else {
           setStatus('loading', 'Model failed to load');
           showError(event.payload);
@@ -1198,6 +1225,78 @@
         } catch (e) { /* ignore */ }
       }, 2000);
     }
+
+    // ── First-run setup ───────────────────────────────────────────────
+    async function showSetupOverlay() {
+      const overlay = document.getElementById('setupOverlay');
+      const list = document.getElementById('setupModelList');
+      const dlArea = document.getElementById('setupDownloadArea');
+      const dlLabel = document.getElementById('setupDownloadLabel');
+      const dlFill = document.getElementById('setupDownloadFill');
+      const dlStatus = document.getElementById('setupDownloadStatus');
+
+      overlay.style.display = '';
+      document.querySelector('.header').style.display = 'none';
+
+      try {
+        const models = await invoke('list_whisper_models');
+        list.innerHTML = '';
+        for (const m of models) {
+          const card = document.createElement('div');
+          card.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;';
+          const recommended = m.id === 'base-en';
+          if (recommended) card.style.borderColor = 'var(--accent)';
+
+          const info = document.createElement('div');
+          info.style.cssText = 'flex:1; min-width:0;';
+          info.innerHTML = '<div style="font-size:13px; font-weight:500;">' + m.name
+            + (recommended ? ' <span style="font-size:10px; color:var(--accent);">(recommended)</span>' : '')
+            + '</div><div style="font-size:11px; color:var(--text-muted);">' + m.size_mb + ' MB</div>';
+          card.appendChild(info);
+
+          const btn = document.createElement('button');
+          btn.textContent = 'Download';
+          btn.style.cssText = 'padding:6px 16px; border:none; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap; background:' + (recommended ? 'var(--accent); color:#000; font-weight:600;' : 'var(--bg-hover); color:var(--text);');
+          btn.onclick = async () => {
+            // Disable all download buttons
+            list.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+            dlArea.style.display = '';
+            dlLabel.textContent = 'Downloading ' + m.name + '...';
+            dlFill.style.width = '0%';
+            dlStatus.textContent = 'Starting...';
+            try {
+              await invoke('download_whisper_model', { modelId: m.id });
+              dlLabel.textContent = 'Download complete! Loading model...';
+              dlFill.style.width = '100%';
+              dlStatus.textContent = '';
+              setStatus('loading', 'Loading whisper model...');
+              await invoke('load_whisper_model');
+              // model-ready event will hide the overlay
+            } catch (e) {
+              dlLabel.textContent = 'Download failed';
+              dlStatus.textContent = '' + e;
+              list.querySelectorAll('button').forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+            }
+          };
+          card.appendChild(btn);
+          list.appendChild(card);
+        }
+      } catch (e) {
+        list.innerHTML = '<div style="color:var(--text-muted);">Failed to load model list</div>';
+      }
+    }
+
+    listen('whisper-download-progress', (event) => {
+      const { downloaded, total, percent } = event.payload;
+      const dlFill = document.getElementById('setupDownloadFill');
+      const dlStatus = document.getElementById('setupDownloadStatus');
+      if (dlFill) dlFill.style.width = percent + '%';
+      if (dlStatus) {
+        const mb = (downloaded / 1_000_000).toFixed(0);
+        const totalMb = (total / 1_000_000).toFixed(0);
+        dlStatus.textContent = mb + ' / ' + totalMb + ' MB (' + percent + '%)';
+      }
+    });
 
     // ── Status ──────────────────────────────────────────────────────────
     function setStatus(state, text) {
