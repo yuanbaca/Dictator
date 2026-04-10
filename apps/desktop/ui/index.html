@@ -649,9 +649,6 @@
       </div>
 
       <div id="certHelp" class="cert-help"></div>
-      <div style="margin-top:6px;">
-        <button id="refreshTailscaleBtn" style="font-size:11px; padding:3px 10px; border:1px solid var(--border); border-radius:4px; background:var(--bg-card); color:var(--text-dim); cursor:pointer;" title="Re-detect Tailscale">↻ Refresh Tailscale</button>
-      </div>
       <div class="info-text muted" id="phoneStatus">No phone connected</div>
       <div class="info-text muted" id="gpuStatus"></div>
     </div>
@@ -699,6 +696,14 @@
               <option value="midnight">Midnight</option>
             </optgroup>
           </select>
+        </div>
+
+        <div class="setting-group">
+          <label>Tailscale (remote access)</label>
+          <div class="toggle" id="tailscaleToggle"></div>
+        </div>
+        <div id="tailscaleHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
+          Requires <a href="https://tailscale.com/" target="_blank" style="color:var(--accent);">Tailscale</a> on both PC and phone. Enables trusted HTTPS from anywhere.
         </div>
 
         <div class="setting-group">
@@ -2054,18 +2059,8 @@
         lanUrlEl.textContent = 'Not available';
       }
 
-      try {
-        const tsUrl = await invoke('get_tailscale_url');
-        if (tsUrl) {
-          tailscaleUrlEl.textContent = tsUrl;
-          tailscaleSectionEl.style.display = '';
-          certHelp.innerHTML = 'LAN requires accepting a security warning on your phone. Tailscale works with no warnings.';
-        } else {
-          certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
-        }
-      } catch (e) {
-        certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
-      }
+      // Default cert help — updated dynamically when Tailscale is enabled
+      certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> → <b>visit this website</b> to proceed.';
 
       // Listen for dynamic Tailscale status changes
       listen('tailscale-changed', (event) => {
@@ -2212,20 +2207,45 @@
     init();
     loadServerInfo();
 
-    // Refresh Tailscale button
-    document.getElementById('refreshTailscaleBtn').addEventListener('click', async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      btn.textContent = '↻ Checking...';
+    // ── Tailscale toggle ────────────────────────────────────────────────
+    const tailscaleToggle = document.getElementById('tailscaleToggle');
+    const tailscaleHint = document.getElementById('tailscaleHint');
+    let tailscaleEnabled = localStorage.getItem('dictator-tailscale') === 'true';
+
+    function updateTailscaleUI() {
+      tailscaleHint.style.display = tailscaleEnabled ? '' : 'none';
+      if (tailscaleEnabled) {
+        tailscaleToggle.classList.add('on');
+      } else {
+        tailscaleToggle.classList.remove('on');
+        tailscaleSectionEl.style.display = 'none';
+        certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> → <b>visit this website</b> to proceed.';
+      }
+    }
+
+    async function enableTailscale() {
       try {
         const msg = await invoke('refresh_tailscale');
         showHint(msg);
       } catch (err) {
         showError('Tailscale: ' + err);
       }
-      btn.disabled = false;
-      btn.textContent = '↻ Refresh Tailscale';
+    }
+
+    tailscaleToggle.addEventListener('click', async () => {
+      tailscaleEnabled = !tailscaleEnabled;
+      localStorage.setItem('dictator-tailscale', tailscaleEnabled);
+      updateTailscaleUI();
+      if (tailscaleEnabled) {
+        await enableTailscale();
+      }
     });
+
+    updateTailscaleUI();
+    // If user previously enabled Tailscale, try to start it
+    if (tailscaleEnabled) {
+      enableTailscale();
+    }
 
     loadAudioDevices();
     loadAutostartState();

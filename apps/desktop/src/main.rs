@@ -1051,49 +1051,9 @@ fn main() {
 
     let lan_url = format!("https://{}:{}", ips[0], LAN_PORT);
 
-    let tailscale_info = tailscale::detect();
-    let tailscale_cert: Option<(Vec<u8>, Vec<u8>, String)> =
-        tailscale_info.as_ref().and_then(|ts| {
-            let cert_dir = std::env::temp_dir().join("dictator-certs");
-            let _ = std::fs::create_dir_all(&cert_dir);
-            let cert_path = cert_dir.join("cert.pem");
-            let key_path = cert_dir.join("key.pem");
-
-            match tailscale::generate_cert(&ts.cert_domain, &cert_path, &key_path) {
-                Ok((cert_pem, key_pem)) => {
-                    eprintln!("Tailscale cert OK for {}", ts.cert_domain);
-                    Some((cert_pem, key_pem, ts.cert_domain.clone()))
-                }
-                Err(e) => {
-                    eprintln!("Tailscale cert failed: {e}");
-                    eprintln!(
-                        "Hint: try running Dictator as Administrator, or run in an admin terminal:"
-                    );
-                    eprintln!(
-                        "  tailscale cert --cert-file=\"{}\" --key-file=\"{}\" {}",
-                        cert_path.display(),
-                        key_path.display(),
-                        ts.cert_domain
-                    );
-                    None
-                }
-            }
-        });
-
-    let tailscale_url = tailscale_cert
-        .as_ref()
-        .map(|(_, _, domain)| format!("https://{}:{}", domain, TAILSCALE_PORT));
-
-    let cert_type = if tailscale_cert.is_some() {
-        "tailscale".to_string()
-    } else {
-        "self-signed".to_string()
-    };
-
+    // Tailscale is opt-in — the frontend enables it via refresh_tailscale when the user toggles it on.
+    // At boot we only start the LAN server. Tailscale server starts dynamically on demand.
     eprintln!("LAN URL: {lan_url} (self-signed, same WiFi)");
-    if let Some(ref ts_url) = tailscale_url {
-        eprintln!("Tailscale URL: {ts_url} (trusted cert, works anywhere)");
-    }
 
     tauri::Builder::default()
         .plugin(
@@ -1129,8 +1089,8 @@ fn main() {
             model_error: Mutex::new(None),
             server_url: Mutex::new(Some(lan_url)),
             connected_phones: connected_phones.clone(),
-            cert_type: Mutex::new(cert_type),
-            tailscale_url: Mutex::new(tailscale_url),
+            cert_type: Mutex::new("self-signed".to_string()),
+            tailscale_url: Mutex::new(None),
             using_gpu: using_gpu.clone(),
             selected_device: selected_device.clone(),
             hotkey: Mutex::new("Ctrl+Shift+Space".into()),
@@ -1316,7 +1276,7 @@ fn main() {
                 });
             }
 
-            // Store shared server state for dynamic Tailscale server startup
+            // Store shared server state so refresh_tailscale can start the Tailscale server on demand
             {
                 let state: State<AppState> = app.handle().state();
                 *state.server_shared.lock().unwrap() = Some(ServerShared {
@@ -1330,94 +1290,30 @@ fn main() {
                     using_gpu: server_gpu.clone(),
                     tts_trigger: tts_tx.clone(),
                 });
-                if tailscale_cert.is_some() {
-                    state.tailscale_server_running.store(true, Ordering::Relaxed);
-                }
             }
 
-            // Background Tailscale poller — checks every 60s for changes
-            {
-                let app_handle_ts = app.handle().clone();
-                std::thread::spawn(move || {
-                    // Wait 10s before first check so the app is fully loaded
-                    std::thread::sleep(std::time::Duration::from_secs(10));
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(60));
-                        let state: State<AppState> = app_handle_ts.state();
-                        let was_running = state.tailscale_server_running.load(Ordering::Relaxed);
-                        let had_url = state.tailscale_url.lock().unwrap().is_some();
-
-                        let ts_info = tailscale::detect();
-                        let now_available = ts_info.is_some();
-
-                        // Only act on state changes
-                        if now_available && !was_running {
-                            eprintln!("Tailscale detected — attempting dynamic server start");
-                            let _ = app_handle_ts.emit("tailscale-changed", "checking");
-                            match invoke_refresh_tailscale(&app_handle_ts) {
-                                Ok(msg) => eprintln!("Tailscale auto-refresh: {msg}"),
-                                Err(e) => eprintln!("Tailscale auto-refresh failed: {e}"),
-                            }
-                        } else if !now_available && had_url {
-                            eprintln!("Tailscale no longer detected");
-                            *state.tailscale_url.lock().unwrap() = None;
-                            let _ = app_handle_ts.emit("tailscale-changed", "");
-                        }
-                    }
-                });
-            }
-
+            // Only the LAN server starts at boot. Tailscale is opt-in via Settings toggle.
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
-                    // LAN server — always runs, self-signed cert, same WiFi only
                     let lan_state = Arc::new(server::ServerState {
-                        transcriber: server_transcriber.clone(),
-                        formatter: server_formatter.clone(),
-                        injection_mode: server_injection.clone(),
-                        connected_phones: server_phones.clone(),
-                        auto_space: server_auto_space.clone(),
-                        auto_format: server_auto_format.clone(),
-                        auto_format_type: server_auto_format_type.clone(),
+                        transcriber: server_transcriber,
+                        formatter: server_formatter,
+                        injection_mode: server_injection,
+                        connected_phones: server_phones,
+                        auto_space: server_auto_space,
+                        auto_format: server_auto_format,
+                        auto_format_type: server_auto_format_type,
                         cert_type: "self-signed".to_string(),
-                        using_gpu: server_gpu.clone(),
-                        tts_trigger: Some(tts_tx.clone()),
+                        using_gpu: server_gpu,
+                        tts_trigger: Some(tts_tx),
                     });
-                    let lan = tokio::spawn(async move {
-                        server::run_server(
-                            lan_state,
-                            LAN_PORT,
-                            server::TlsSource::SelfSigned { local_ips: ips },
-                        )
-                        .await;
-                    });
-
-                    // Tailscale server — trusted cert, works from anywhere
-                    if let Some((cert_pem, key_pem, _domain)) = tailscale_cert {
-                        let ts_state = Arc::new(server::ServerState {
-                            transcriber: server_transcriber,
-                            formatter: server_formatter,
-                            injection_mode: server_injection,
-                            connected_phones: server_phones,
-                            auto_space: server_auto_space,
-                            auto_format: server_auto_format,
-                            auto_format_type: server_auto_format_type,
-                            cert_type: "tailscale".to_string(),
-                            using_gpu: server_gpu,
-                            tts_trigger: Some(tts_tx),
-                        });
-                        let ts = tokio::spawn(async move {
-                            server::run_server(
-                                ts_state,
-                                TAILSCALE_PORT,
-                                server::TlsSource::Tailscale { cert_pem, key_pem },
-                            )
-                            .await;
-                        });
-                        let _ = tokio::join!(lan, ts);
-                    } else {
-                        let _ = lan.await;
-                    }
+                    server::run_server(
+                        lan_state,
+                        LAN_PORT,
+                        server::TlsSource::SelfSigned { local_ips: ips },
+                    )
+                    .await;
                 });
             });
 

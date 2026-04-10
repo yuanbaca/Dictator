@@ -216,8 +216,9 @@
   </p>
   <p>
     Dictator solves this by serving the page over <strong>HTTPS</strong> with a
-    security certificate. The desktop app runs two HTTPS servers and shows you
-    two URLs &mdash; pick whichever suits your situation:
+    security certificate. By default, Dictator runs a LAN server with a
+    self-signed certificate. You can optionally enable Tailscale in Settings
+    for a trusted certificate that works from anywhere:
   </p>
 
   <div class="info-box">
@@ -379,8 +380,8 @@
     <div class="step">
       <span class="step-number">4</span>
       <div class="step-text">
-        <strong>Restart Dictator</strong><br>
-        Close and reopen the desktop app. It will detect Tailscale automatically and get a trusted certificate.
+        <strong>Enable Tailscale in Dictator</strong><br>
+        Open the desktop app, go to <strong>Settings</strong> (⋮ button), and turn on the <strong>Tailscale</strong> toggle. Dictator will detect Tailscale and get a trusted certificate.
       </div>
     </div>
 
@@ -434,12 +435,12 @@
       Then reload the Dictator page and tap "Allow" when prompted.
     </dd>
 
-    <dt>Tailscale is installed but Dictator still shows "Self-signed"</dt>
+    <dt>Tailscale is installed but Dictator doesn't show a Tailscale URL</dt>
     <dd>
-      Make sure you completed <strong>Step 3</strong> above (enable HTTPS in the
-      Tailscale admin panel). Also make sure Tailscale is <strong>connected</strong>
+      Make sure you've turned on the <strong>Tailscale toggle</strong> in Settings.
+      Also make sure you completed <strong>Step 3</strong> above (enable HTTPS in the
+      Tailscale admin panel) and that Tailscale is <strong>connected</strong>
       (look for the Tailscale icon in your system tray &mdash; it should say "Connected").
-      Then restart Dictator.
     </dd>
 
     <dt>Dictator says "Tailscale cert failed"</dt>
