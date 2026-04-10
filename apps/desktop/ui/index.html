@@ -47,6 +47,12 @@
       position: relative;
     }
 
+    .logo-circle {
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      object-fit: cover;
+    }
+
     .header h1 {
       font-size: 20px;
       font-weight: 600;
@@ -562,7 +568,7 @@
 </head>
 <body>
   <div class="header">
-    <img src="dictatorhat.png" alt="Dictator" style="width:48px; height:48px; margin-bottom:4px;">
+    <img src="dictatorhat.png" alt="Dictator" class="logo-circle" style="width:48px; height:48px; margin-bottom:4px;">
     <h1>Dictator</h1>
     <div class="subtitle">What you say goes... (to your cursor)</div>
     <button class="settings-btn" id="settingsBtn" title="Settings">&#x22EE;</button>
@@ -580,7 +586,7 @@
   <div id="setupOverlay">
     <div style="max-width:360px; width:100%; text-align:center;">
       <div style="margin-bottom:20px;">
-        <img src="dictatorhat.png" alt="" style="width:48px; height:48px; margin-bottom:8px;">
+        <img src="dictatorhat.png" alt="" class="logo-circle" style="width:48px; height:48px; margin-bottom:8px;">
         <h2 style="font-size:18px; margin-bottom:4px;">Welcome to Dictator</h2>
         <p style="font-size:13px; color:var(--text-dim);">Download a speech recognition model to get started.</p>
       </div>
