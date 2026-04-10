@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use deskmic::audio_capture;
 use deskmic::injection::{self, InjectionMode};
 use deskmic::server;
@@ -6,6 +8,7 @@ use deskmic::transcription;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
 
 /// Recording session: a background thread captures audio into a shared buffer.
@@ -32,6 +35,8 @@ struct AppState {
     using_gpu: Arc<Mutex<Option<bool>>>,
     /// Selected audio input device name (None = system default)
     selected_device: Arc<Mutex<Option<String>>>,
+    /// Current hotkey preset name (e.g. "Ctrl+Shift+Space")
+    hotkey: Mutex<String>,
 }
 
 const LAN_PORT: u16 = 3456;
@@ -132,7 +137,7 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop_and_transcribe(state: State<AppState>) -> Result<String, String> {
+fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<String, String> {
     let session = {
         let mut guard = state.recording.lock().unwrap();
         guard.take().ok_or("Not recording")?
@@ -159,8 +164,11 @@ fn stop_and_transcribe(state: State<AppState>) -> Result<String, String> {
     let transcriber_guard = state.transcriber.lock().unwrap();
     let transcriber = transcriber_guard.as_ref().ok_or("Model not loaded")?;
 
+    let handle = app_handle.clone();
     let result = transcriber
-        .transcribe(&samples)
+        .transcribe_with_progress(&samples, move |pct| {
+            let _ = handle.emit("transcribe-progress", pct);
+        })
         .map_err(|e| format!("Transcription failed: {e}"))?;
 
     // Gentle handling for no speech
@@ -222,6 +230,115 @@ fn get_selected_device(state: State<AppState>) -> Option<String> {
 #[tauri::command]
 fn set_selected_device(state: State<AppState>, device: Option<String>) {
     *state.selected_device.lock().unwrap() = device;
+}
+
+#[tauri::command]
+fn get_autostart() -> bool {
+    use std::os::windows::process::CommandExt;
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "DeskMic",
+        ])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output();
+    matches!(output, Ok(o) if o.status.success())
+}
+
+#[tauri::command]
+fn get_hotkey(state: State<AppState>) -> String {
+    state.hotkey.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_hotkey(
+    app_handle: tauri::AppHandle,
+    state: State<AppState>,
+    preset: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Unregister all existing hotkeys
+    let _ = app_handle.global_shortcut().unregister_all();
+
+    // Register new (unless "none")
+    if let Some(sc) = parse_hotkey_preset(&preset) {
+        app_handle
+            .global_shortcut()
+            .register(sc)
+            .map_err(|e| format!("Failed to register hotkey: {e}"))?;
+    }
+
+    *state.hotkey.lock().unwrap() = preset;
+    Ok(())
+}
+
+fn parse_hotkey_preset(
+    preset: &str,
+) -> Option<tauri_plugin_global_shortcut::Shortcut> {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+    match preset {
+        "Ctrl+Shift+Space" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::Space,
+        )),
+        "Ctrl+Shift+D" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyD,
+        )),
+        "Ctrl+Alt+Space" => Some(Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::ALT),
+            Code::Space,
+        )),
+        "F9" => Some(Shortcut::new(None, Code::F9)),
+        "Ctrl+F9" => Some(Shortcut::new(Some(Modifiers::CONTROL), Code::F9)),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    if enabled {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe_str = exe.to_str().ok_or("Invalid exe path")?;
+        let output = std::process::Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "DeskMic",
+                "/t",
+                "REG_SZ",
+                "/d",
+                exe_str,
+                "/f",
+            ])
+            .creation_flags(0x08000000)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err("Failed to enable autostart".into());
+        }
+    } else {
+        let output = std::process::Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "DeskMic",
+                "/f",
+            ])
+            .creation_flags(0x08000000)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err("Failed to disable autostart".into());
+        }
+    }
+    Ok(())
 }
 
 // ── App entry point ─────────────────────────────────────────────────────
@@ -293,6 +410,17 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.emit("toggle-recording", ());
+                        }
+                    }
+                })
+                .build(),
+        )
         .manage(AppState {
             transcriber: transcriber.clone(),
             recording: Mutex::new(None),
@@ -305,6 +433,7 @@ fn main() {
             tailscale_url: Mutex::new(tailscale_url),
             using_gpu: using_gpu.clone(),
             selected_device: selected_device.clone(),
+            hotkey: Mutex::new("Ctrl+Shift+Space".into()),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -323,6 +452,10 @@ fn main() {
             cancel_recording,
             inject_text,
             set_injection_mode,
+            get_autostart,
+            set_autostart,
+            get_hotkey,
+            set_hotkey,
         ])
         .setup(move |app| {
             let transcriber_handle = transcriber.clone();
@@ -409,6 +542,58 @@ fn main() {
                 });
             });
 
+            // ── System tray — hides to tray on close, quit from menu ───
+            let show_item =
+                tauri::menu::MenuItem::with_id(app, "show", "Show DeskMic", true, None::<&str>)?;
+            let quit_item =
+                tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu =
+                tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            let _tray = tauri::tray::TrayIconBuilder::new()
+                .icon(app.default_window_icon().expect("Missing app icon").clone())
+                .tooltip("DeskMic Dictation")
+                .menu(&tray_menu)
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // Hide to tray when the X button is clicked (instead of quitting)
+            let window = app.get_webview_window("main").unwrap();
+            let win_hide = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = win_hide.hide();
+                }
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -416,30 +601,41 @@ fn main() {
 }
 
 fn find_model_path() -> PathBuf {
-    let candidates = [
-        "../../models/ggml-base.en.bin",
-        "models/ggml-base.en.bin",
-        "../models/ggml-base.en.bin",
+    const MODEL: &str = "models/ggml-base.en.bin";
+
+    // Search relative to the working directory
+    let cwd_candidates = [
+        PathBuf::from(format!("../../{MODEL}")),
+        PathBuf::from(MODEL),
+        PathBuf::from(format!("../{MODEL}")),
     ];
 
-    for path in &candidates {
-        let p = PathBuf::from(path);
+    for p in &cwd_candidates {
         if p.exists() {
             eprintln!("Found model at: {}", p.display());
-            return p;
+            return p.clone();
         }
     }
 
+    // Search relative to the executable (works when double-clicking the exe)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            let model = exe_dir.join("../../models/ggml-base.en.bin");
-            if model.exists() {
-                eprintln!("Found model at: {}", model.display());
-                return model;
+            let exe_candidates = [
+                exe_dir.join(format!("../../../../{MODEL}")), // from target/release/
+                exe_dir.join(format!("../../{MODEL}")),       // from apps/desktop/
+                exe_dir.join(format!("../{MODEL}")),
+                exe_dir.join(MODEL),                          // model next to exe
+            ];
+            for p in &exe_candidates {
+                if p.exists() {
+                    eprintln!("Found model at: {}", p.display());
+                    return p.clone();
+                }
             }
         }
     }
 
     eprintln!("WARNING: Could not find whisper model file!");
-    PathBuf::from("../../models/ggml-base.en.bin")
+    eprintln!("Place ggml-base.en.bin in the models/ folder at the project root.");
+    PathBuf::from(MODEL)
 }

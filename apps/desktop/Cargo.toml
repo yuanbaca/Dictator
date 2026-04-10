@@ -53,7 +53,8 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 rcgen = "0.13"
 
 # Tauri
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

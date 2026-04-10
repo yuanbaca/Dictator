@@ -4,13 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DeskMic Dictation</title>
+  <script>
+    // Apply saved theme immediately to prevent flash of default theme
+    (function() {
+      const saved = localStorage.getItem('deskmic-theme');
+      if (saved) document.documentElement.setAttribute('data-theme', saved);
+    })();
+  </script>
   <style>
+    :root {
+      --bg: #1a1a2e;
+      --bg-card: #16213e;
+      --bg-hover: #2a2a4a;
+      --text: #eeeeee;
+      --text-dim: #999999;
+      --text-muted: #555555;
+      --accent: #4ecca3;
+      --accent-hover: #3db88f;
+      --accent-glow: rgba(78,204,163,0.15);
+      --danger: #e74c3c;
+      --danger-glow: rgba(231,76,60,0.2);
+      --warning: #f0a500;
+      --border: #333333;
+      --progress: #3498db;
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #1a1a2e;
-      color: #eee;
+      background: var(--bg);
+      color: var(--text);
       height: 100vh;
       display: flex;
       flex-direction: column;
@@ -20,18 +44,43 @@
     .header {
       padding: 20px 24px 12px;
       text-align: center;
+      position: relative;
     }
 
     .header h1 {
       font-size: 20px;
       font-weight: 600;
-      color: #fff;
+      color: var(--text);
     }
 
     .header .subtitle {
       font-size: 12px;
-      color: #888;
+      color: var(--text-dim);
       margin-top: 4px;
+    }
+
+    .settings-btn {
+      position: absolute;
+      right: 20px;
+      top: 18px;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-size: 18px;
+      cursor: pointer;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .settings-btn:hover {
+      color: var(--text);
+      border-color: var(--accent);
+      background: var(--accent-glow);
     }
 
     .status-bar {
@@ -47,19 +96,45 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #555;
+      background: var(--text-muted);
       transition: background 0.3s;
     }
 
-    .status-dot.loading { background: #f0a500; }
-    .status-dot.ready { background: #4ecca3; }
-    .status-dot.recording { background: #e74c3c; animation: pulse 1s infinite; }
-    .status-dot.transcribing { background: #3498db; animation: pulse 0.5s infinite; }
+    .status-dot.loading { background: var(--warning); }
+    .status-dot.ready { background: var(--accent); }
+    .status-dot.recording { background: var(--danger); animation: pulse 1s infinite; }
+    .status-dot.transcribing { background: var(--progress); animation: pulse 0.5s infinite; }
 
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
     }
+
+    .rec-timer {
+      font-size: 12px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      margin-left: 8px;
+    }
+
+    .rec-timer.warning { color: var(--warning); }
+
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .progress-bar .fill {
+      height: 100%;
+      width: 0%;
+      background: var(--progress);
+      border-radius: 3px;
+    }
+
+    .progress-bar.done .fill { background: var(--accent); }
 
     .main-area {
       flex: 1;
@@ -68,15 +143,15 @@
       align-items: center;
       justify-content: center;
       padding: 20px;
-      gap: 24px;
+      gap: 20px;
     }
 
     .mic-button {
       width: 120px;
       height: 120px;
       border-radius: 50%;
-      border: 3px solid #4ecca3;
-      background: rgba(78, 204, 163, 0.1);
+      border: 3px solid var(--accent);
+      background: var(--accent-glow);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -86,14 +161,14 @@
     }
 
     .mic-button:hover {
-      background: rgba(78, 204, 163, 0.2);
+      filter: brightness(1.2);
       transform: scale(1.05);
     }
 
     .mic-button:active,
     .mic-button.recording {
-      border-color: #e74c3c;
-      background: rgba(231, 76, 60, 0.2);
+      border-color: var(--danger);
+      background: var(--danger-glow);
       transform: scale(0.95);
     }
 
@@ -102,14 +177,14 @@
     }
 
     @keyframes record-pulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
-      50% { box-shadow: 0 0 0 20px rgba(231, 76, 60, 0); }
+      0%, 100% { box-shadow: 0 0 0 0 var(--danger-glow); }
+      50% { box-shadow: 0 0 0 20px transparent; }
     }
 
     .mic-button.disabled {
       opacity: 0.3;
       cursor: not-allowed;
-      border-color: #555;
+      border-color: var(--text-muted);
     }
 
     .mic-icon {
@@ -119,7 +194,7 @@
 
     .mic-hint {
       font-size: 13px;
-      color: #888;
+      color: var(--text-dim);
       text-align: center;
     }
 
@@ -128,19 +203,19 @@
       max-width: 360px;
       min-height: 80px;
       max-height: 160px;
-      background: #16213e;
-      border: 1px solid #333;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
       border-radius: 12px;
       padding: 14px;
       font-size: 14px;
       line-height: 1.5;
-      color: #ddd;
+      color: var(--text);
       overflow-y: auto;
       user-select: text;
     }
 
     .transcript-area.empty {
-      color: #555;
+      color: var(--text-muted);
       font-style: italic;
     }
 
@@ -168,25 +243,24 @@
     }
 
     .btn-inject {
-      background: #4ecca3;
-      color: #1a1a2e;
+      background: var(--accent);
+      color: var(--bg);
     }
 
-    .btn-inject:hover:not(:disabled) { background: #3db88f; }
+    .btn-inject:hover:not(:disabled) { background: var(--accent-hover); }
 
     .btn-clear {
-      background: #333;
-      color: #ccc;
+      background: var(--border);
+      color: var(--text-dim);
       flex: 0.5;
     }
 
-    .btn-clear:hover:not(:disabled) { background: #444; }
+    .btn-clear:hover:not(:disabled) { filter: brightness(1.3); }
 
-    /* Hint message (gentle, not alarming) */
     .hint-msg {
-      background: rgba(78, 204, 163, 0.1);
-      border: 1px solid rgba(78, 204, 163, 0.2);
-      color: #999;
+      background: var(--accent-glow);
+      border: 1px solid var(--accent-glow);
+      color: var(--text-dim);
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 13px;
@@ -199,11 +273,10 @@
 
     .hint-msg.visible { display: block; }
 
-    /* Error message (red, for real errors) */
     .error-msg {
-      background: rgba(231, 76, 60, 0.15);
-      border: 1px solid rgba(231, 76, 60, 0.3);
-      color: #e74c3c;
+      background: var(--danger-glow);
+      border: 1px solid var(--danger-glow);
+      color: var(--danger);
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 13px;
@@ -214,60 +287,15 @@
 
     .error-msg.visible { display: block; }
 
-    .settings-area {
-      padding: 16px 24px;
-      border-top: 1px solid #2a2a4a;
+    /* Phone connect info bar */
+    .info-bar {
+      padding: 10px 24px 14px;
+      border-top: 1px solid var(--border);
     }
-
-    .setting-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 13px;
-      margin-bottom: 10px;
-    }
-
-    .setting-row:last-child { margin-bottom: 0; }
-
-    .setting-row label { color: #999; }
-
-    .setting-row select {
-      background: #16213e;
-      color: #ddd;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 6px 10px;
-      font-size: 13px;
-    }
-
-    /* Toggle switch */
-    .toggle {
-      position: relative;
-      width: 40px;
-      height: 22px;
-      background: #333;
-      border-radius: 11px;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .toggle.on { background: #4ecca3; }
-    .toggle::after {
-      content: '';
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 18px;
-      height: 18px;
-      background: #fff;
-      border-radius: 50%;
-      transition: left 0.2s;
-    }
-    .toggle.on::after { left: 20px; }
 
     .phone-connect {
-      margin-bottom: 12px;
       padding: 12px;
-      background: #16213e;
+      background: var(--bg-card);
       border-radius: 8px;
       text-align: center;
     }
@@ -275,20 +303,20 @@
     .url-option {
       margin: 8px 0;
       padding: 8px;
-      background: rgba(255,255,255,0.03);
+      background: var(--bg-hover);
       border-radius: 6px;
     }
 
     .url-label {
       font-size: 11px;
-      color: #888;
+      color: var(--text-dim);
       margin-bottom: 2px;
     }
 
     .url-value {
       font-size: 14px;
       font-weight: 600;
-      color: #4ecca3;
+      color: var(--accent);
       word-break: break-all;
     }
 
@@ -302,31 +330,173 @@
       margin-top: 4px;
       vertical-align: middle;
     }
-    .cert-badge.tailscale { background: #4ecca3; color: #1a1a2e; }
-    .cert-badge.self-signed { background: #f0a500; color: #1a1a2e; }
+    .cert-badge.tailscale { background: var(--accent); color: var(--bg); }
+    .cert-badge.self-signed { background: var(--warning); color: var(--bg); }
 
     .cert-help {
       font-size: 11px;
-      color: #777;
+      color: var(--text-muted);
       margin-top: 6px;
       line-height: 1.4;
     }
+
+    .info-text {
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    .info-text.accent { color: var(--accent); }
+    .info-text.muted { color: var(--text-muted); }
+
+    /* Settings Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal-overlay.visible { display: flex; }
+
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 90%;
+      max-width: 380px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .modal-close:hover {
+      color: var(--text);
+      background: var(--bg-hover);
+    }
+
+    .modal-body {
+      padding: 16px 20px;
+    }
+
+    .setting-group {
+      margin-bottom: 16px;
+    }
+
+    .setting-group label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+
+    .setting-group select {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .setting-group select option {
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+
+    .setting-row:last-child { margin-bottom: 0; }
+
+    .setting-row label { color: var(--text-dim); }
+
+    .setting-row select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      max-width: 200px;
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      background: var(--border);
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: left 0.2s;
+    }
+    .toggle.on::after { left: 20px; }
   </style>
 </head>
 <body>
   <div class="header">
     <h1>DeskMic Dictation</h1>
     <div class="subtitle">Speak into your mic, text appears at your cursor</div>
+    <button class="settings-btn" id="settingsBtn" title="Settings">&#x22EE;</button>
   </div>
 
   <div class="status-bar">
     <div class="status-dot" id="statusDot"></div>
     <span id="statusText">Starting...</span>
+    <span class="rec-timer" id="recTimer"></span>
   </div>
 
+  <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+
   <div class="main-area">
-    <button class="mic-button disabled" id="micBtn" title="Hold to record">
-      <span class="mic-icon">🎙</span>
+    <button class="mic-button disabled" id="micBtn" title="Click to record">
+      <span class="mic-icon">&#x1F399;</span>
     </button>
     <div class="mic-hint" id="micHint">Loading model...</div>
 
@@ -347,20 +517,18 @@
     </div>
   </div>
 
-  <div class="settings-area">
+  <div class="info-bar">
     <div class="phone-connect" id="phoneConnect">
-      <div style="font-size: 12px; color: #888; margin-bottom: 6px;">
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">
         Open on your phone:
       </div>
 
-      <!-- LAN URL (always shown) -->
       <div class="url-option">
         <div class="url-label">Same WiFi (LAN)</div>
         <div class="url-value" id="lanUrl">Loading...</div>
         <span class="cert-badge self-signed">Self-signed</span>
       </div>
 
-      <!-- Tailscale URL (shown only if available) -->
       <div class="url-option" id="tailscaleSection" style="display:none;">
         <div class="url-label">Anywhere (Tailscale)</div>
         <div class="url-value" id="tailscaleUrl"></div>
@@ -368,26 +536,97 @@
       </div>
 
       <div id="certHelp" class="cert-help"></div>
-      <div id="phoneStatus" style="font-size: 11px; color: #666; margin-top: 4px;">No phone connected</div>
-      <div id="gpuStatus" style="font-size: 11px; color: #666; margin-top: 4px;"></div>
+      <div class="info-text muted" id="phoneStatus">No phone connected</div>
+      <div class="info-text muted" id="gpuStatus"></div>
     </div>
+  </div>
 
-    <div class="setting-row">
-      <label>Microphone</label>
-      <select id="micDevice" style="max-width: 200px;">
-        <option value="">System default</option>
-      </select>
-    </div>
-    <div class="setting-row">
-      <label>Add space after insert</label>
-      <div class="toggle on" id="autoSpaceToggle"></div>
-    </div>
-    <div class="setting-row">
-      <label>Insertion mode</label>
-      <select id="injectionMode">
-        <option value="paste" selected>Clipboard paste (fast)</option>
-        <option value="type">Simulated typing (compatible)</option>
-      </select>
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="modal-close" id="closeSettings">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label>Theme</label>
+          <select id="themeSelect">
+            <optgroup label="Default">
+              <option value="deskmic-dark">DeskMic Dark</option>
+              <option value="deskmic-light">DeskMic Light</option>
+            </optgroup>
+            <optgroup label="Mint">
+              <option value="mint-dark">Mint Dark</option>
+              <option value="mint-light">Mint Light</option>
+            </optgroup>
+            <optgroup label="Colorful">
+              <option value="bubble-gum">Bubble Gum</option>
+              <option value="ocean">Ocean</option>
+              <option value="sunset">Sunset</option>
+              <option value="dracula">Dracula</option>
+            </optgroup>
+            <optgroup label="Brand Inspired">
+              <option value="discord">Discord</option>
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="youtube">YouTube</option>
+              <option value="spotify">Spotify</option>
+              <option value="twitter">Twitter / X</option>
+              <option value="slack">Slack</option>
+              <option value="netflix">Netflix</option>
+              <option value="reddit">Reddit</option>
+              <option value="twitch">Twitch</option>
+            </optgroup>
+            <optgroup label="Minimal">
+              <option value="snow">Snow</option>
+              <option value="midnight">Midnight</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label>Recording hotkey</label>
+          <select id="hotkeySelect">
+            <option value="Ctrl+Shift+Space">Ctrl + Shift + Space</option>
+            <option value="Ctrl+Shift+D">Ctrl + Shift + D</option>
+            <option value="Ctrl+Alt+Space">Ctrl + Alt + Space</option>
+            <option value="F9">F9</option>
+            <option value="Ctrl+F9">Ctrl + F9</option>
+            <option value="none">Disabled</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label>Microphone</label>
+          <select id="micDevice">
+            <option value="">System default</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label>Add space after insert</label>
+          <div class="toggle on" id="autoSpaceToggle"></div>
+        </div>
+
+        <div class="setting-row">
+          <label>Start on boot</label>
+          <div class="toggle" id="autostartToggle"></div>
+        </div>
+
+        <div class="setting-row">
+          <label>Sound effects</label>
+          <div class="toggle" id="soundToggle"></div>
+        </div>
+
+        <div class="setting-group">
+          <label>Insertion mode</label>
+          <select id="injectionMode">
+            <option value="paste" selected>Clipboard paste (fast)</option>
+            <option value="type">Simulated typing (compatible)</option>
+          </select>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -395,7 +634,193 @@
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
 
-    // DOM elements
+    // ── Theme Definitions ───────────────────────────────────────────────
+    const THEMES = {
+      'deskmic-dark': {
+        name: 'DeskMic Dark',
+        bg: '#1a1a2e', bgCard: '#16213e', bgHover: '#2a2a4a',
+        text: '#eeeeee', textDim: '#999999', textMuted: '#555555',
+        accent: '#4ecca3', accentHover: '#3db88f', accentGlow: 'rgba(78,204,163,.15)',
+        danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.2)',
+        warning: '#f0a500', border: '#333333', progress: '#3498db'
+      },
+      'deskmic-light': {
+        name: 'DeskMic Light',
+        bg: '#f0f2f5', bgCard: '#ffffff', bgHover: '#e4e6e9',
+        text: '#1a1a2e', textDim: '#666666', textMuted: '#aaaaaa',
+        accent: '#4ecca3', accentHover: '#3db88f', accentGlow: 'rgba(78,204,163,.12)',
+        danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.12)',
+        warning: '#d48a00', border: '#d0d0d0', progress: '#3498db'
+      },
+      'mint-dark': {
+        name: 'Mint Dark',
+        bg: '#1a2e28', bgCard: '#16302a', bgHover: '#2a4a3e',
+        text: '#e0f5ee', textDim: '#88b8a8', textMuted: '#557766',
+        accent: '#00d4aa', accentHover: '#00b892', accentGlow: 'rgba(0,212,170,.15)',
+        danger: '#ff6b6b', dangerGlow: 'rgba(255,107,107,.2)',
+        warning: '#ffd93d', border: '#2a4a3e', progress: '#00d4aa'
+      },
+      'mint-light': {
+        name: 'Mint Light',
+        bg: '#f0faf6', bgCard: '#ffffff', bgHover: '#e0f0ea',
+        text: '#1a3a2e', textDim: '#558877', textMuted: '#99bbaa',
+        accent: '#00b894', accentHover: '#009e7e', accentGlow: 'rgba(0,184,148,.12)',
+        danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.12)',
+        warning: '#d48a00', border: '#c8e6d8', progress: '#00b894'
+      },
+      'bubble-gum': {
+        name: 'Bubble Gum',
+        bg: '#fff0f5', bgCard: '#ffffff', bgHover: '#ffe0eb',
+        text: '#4a2040', textDim: '#996688', textMuted: '#cc99bb',
+        accent: '#ff69b4', accentHover: '#ff4da6', accentGlow: 'rgba(255,105,180,.15)',
+        danger: '#ff4757', dangerGlow: 'rgba(255,71,87,.15)',
+        warning: '#ffa502', border: '#ffd0e0', progress: '#ff69b4'
+      },
+      'discord': {
+        name: 'Discord',
+        bg: '#36393f', bgCard: '#2f3136', bgHover: '#40444b',
+        text: '#dcddde', textDim: '#96989d', textMuted: '#72767d',
+        accent: '#5865f2', accentHover: '#4752c4', accentGlow: 'rgba(88,101,242,.15)',
+        danger: '#ed4245', dangerGlow: 'rgba(237,66,69,.2)',
+        warning: '#fee75c', border: '#202225', progress: '#5865f2'
+      },
+      'facebook': {
+        name: 'Facebook',
+        bg: '#f0f2f5', bgCard: '#ffffff', bgHover: '#e4e6e9',
+        text: '#1c1e21', textDim: '#606770', textMuted: '#8a8d91',
+        accent: '#1877f2', accentHover: '#166fe5', accentGlow: 'rgba(24,119,242,.12)',
+        danger: '#fa3e3e', dangerGlow: 'rgba(250,62,62,.12)',
+        warning: '#f7b928', border: '#dadde1', progress: '#1877f2'
+      },
+      'instagram': {
+        name: 'Instagram',
+        bg: '#121212', bgCard: '#1e1e1e', bgHover: '#2a2a2a',
+        text: '#f5f5f5', textDim: '#a8a8a8', textMuted: '#737373',
+        accent: '#e1306c', accentHover: '#c13584', accentGlow: 'rgba(225,48,108,.15)',
+        danger: '#ed4956', dangerGlow: 'rgba(237,73,86,.2)',
+        warning: '#fdcb58', border: '#363636', progress: '#e1306c'
+      },
+      'youtube': {
+        name: 'YouTube',
+        bg: '#0f0f0f', bgCard: '#1a1a1a', bgHover: '#272727',
+        text: '#f1f1f1', textDim: '#aaaaaa', textMuted: '#717171',
+        accent: '#ff0000', accentHover: '#cc0000', accentGlow: 'rgba(255,0,0,.12)',
+        danger: '#ff4444', dangerGlow: 'rgba(255,68,68,.2)',
+        warning: '#ffcc00', border: '#303030', progress: '#ff0000'
+      },
+      'spotify': {
+        name: 'Spotify',
+        bg: '#121212', bgCard: '#181818', bgHover: '#282828',
+        text: '#ffffff', textDim: '#b3b3b3', textMuted: '#6a6a6a',
+        accent: '#1db954', accentHover: '#1ed760', accentGlow: 'rgba(29,185,84,.15)',
+        danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.2)',
+        warning: '#ffa500', border: '#282828', progress: '#1db954'
+      },
+      'twitter': {
+        name: 'Twitter / X',
+        bg: '#15202b', bgCard: '#192734', bgHover: '#22303c',
+        text: '#d9d9d9', textDim: '#8899a6', textMuted: '#657786',
+        accent: '#1da1f2', accentHover: '#1a91da', accentGlow: 'rgba(29,161,242,.15)',
+        danger: '#e0245e', dangerGlow: 'rgba(224,36,94,.2)',
+        warning: '#ffad1f', border: '#38444d', progress: '#1da1f2'
+      },
+      'slack': {
+        name: 'Slack',
+        bg: '#1a1d21', bgCard: '#222529', bgHover: '#2c2d30',
+        text: '#d1d2d3', textDim: '#9a9b9e', textMuted: '#616061',
+        accent: '#36c5f0', accentHover: '#1da8d8', accentGlow: 'rgba(54,197,240,.15)',
+        danger: '#e01e5a', dangerGlow: 'rgba(224,30,90,.2)',
+        warning: '#ecb22e', border: '#35373b', progress: '#2eb67d'
+      },
+      'netflix': {
+        name: 'Netflix',
+        bg: '#141414', bgCard: '#1a1a1a', bgHover: '#2a2a2a',
+        text: '#e5e5e5', textDim: '#999999', textMuted: '#666666',
+        accent: '#e50914', accentHover: '#b20710', accentGlow: 'rgba(229,9,20,.15)',
+        danger: '#ff6b6b', dangerGlow: 'rgba(255,107,107,.2)',
+        warning: '#e6b800', border: '#333333', progress: '#e50914'
+      },
+      'reddit': {
+        name: 'Reddit',
+        bg: '#1a1a1b', bgCard: '#272729', bgHover: '#343536',
+        text: '#d7dadc', textDim: '#818384', textMuted: '#6a6a6b',
+        accent: '#ff4500', accentHover: '#cc3700', accentGlow: 'rgba(255,69,0,.15)',
+        danger: '#ff585b', dangerGlow: 'rgba(255,88,91,.2)',
+        warning: '#ffd635', border: '#343536', progress: '#ff4500'
+      },
+      'twitch': {
+        name: 'Twitch',
+        bg: '#0e0e10', bgCard: '#18181b', bgHover: '#26262c',
+        text: '#efeff1', textDim: '#adadb8', textMuted: '#636369',
+        accent: '#9146ff', accentHover: '#772ce8', accentGlow: 'rgba(145,70,255,.15)',
+        danger: '#eb0400', dangerGlow: 'rgba(235,4,0,.2)',
+        warning: '#ffd600', border: '#2f2f35', progress: '#9146ff'
+      },
+      'ocean': {
+        name: 'Ocean',
+        bg: '#0a192f', bgCard: '#112240', bgHover: '#1d3557',
+        text: '#ccd6f6', textDim: '#8892b0', textMuted: '#606a86',
+        accent: '#64ffda', accentHover: '#4cd9b5', accentGlow: 'rgba(100,255,218,.1)',
+        danger: '#ff6b6b', dangerGlow: 'rgba(255,107,107,.15)',
+        warning: '#ffd93d', border: '#233554', progress: '#64ffda'
+      },
+      'sunset': {
+        name: 'Sunset',
+        bg: '#2d1b2e', bgCard: '#3a2040', bgHover: '#4a2d50',
+        text: '#f5e6d3', textDim: '#c4a882', textMuted: '#8a7060',
+        accent: '#ff6b35', accentHover: '#ff8c5a', accentGlow: 'rgba(255,107,53,.15)',
+        danger: '#ff4757', dangerGlow: 'rgba(255,71,87,.2)',
+        warning: '#feca57', border: '#4a2d50', progress: '#ff6b35'
+      },
+      'dracula': {
+        name: 'Dracula',
+        bg: '#282a36', bgCard: '#21222c', bgHover: '#343746',
+        text: '#f8f8f2', textDim: '#bfbfb6', textMuted: '#6272a4',
+        accent: '#bd93f9', accentHover: '#a77bdb', accentGlow: 'rgba(189,147,249,.15)',
+        danger: '#ff5555', dangerGlow: 'rgba(255,85,85,.2)',
+        warning: '#f1fa8c', border: '#44475a', progress: '#8be9fd'
+      },
+      'snow': {
+        name: 'Snow',
+        bg: '#f8f9fc', bgCard: '#ffffff', bgHover: '#eef0f4',
+        text: '#2e3440', textDim: '#6b7894', textMuted: '#a0aec0',
+        accent: '#5e81ac', accentHover: '#4c6e96', accentGlow: 'rgba(94,129,172,.12)',
+        danger: '#bf616a', dangerGlow: 'rgba(191,97,106,.12)',
+        warning: '#d08770', border: '#d8dee9', progress: '#5e81ac'
+      },
+      'midnight': {
+        name: 'Midnight',
+        bg: '#0d1117', bgCard: '#161b22', bgHover: '#21262d',
+        text: '#c9d1d9', textDim: '#8b949e', textMuted: '#484f58',
+        accent: '#58a6ff', accentHover: '#388bfd', accentGlow: 'rgba(88,166,255,.12)',
+        danger: '#f85149', dangerGlow: 'rgba(248,81,73,.15)',
+        warning: '#d29922', border: '#30363d', progress: '#58a6ff'
+      }
+    };
+
+    function applyTheme(id) {
+      const t = THEMES[id];
+      if (!t) return;
+      const s = document.documentElement.style;
+      s.setProperty('--bg', t.bg);
+      s.setProperty('--bg-card', t.bgCard);
+      s.setProperty('--bg-hover', t.bgHover);
+      s.setProperty('--text', t.text);
+      s.setProperty('--text-dim', t.textDim);
+      s.setProperty('--text-muted', t.textMuted);
+      s.setProperty('--accent', t.accent);
+      s.setProperty('--accent-hover', t.accentHover);
+      s.setProperty('--accent-glow', t.accentGlow);
+      s.setProperty('--danger', t.danger);
+      s.setProperty('--danger-glow', t.dangerGlow);
+      s.setProperty('--warning', t.warning);
+      s.setProperty('--border', t.border);
+      s.setProperty('--progress', t.progress);
+      localStorage.setItem('deskmic-theme', id);
+      themeSelect.value = id;
+    }
+
+    // ── DOM Elements ────────────────────────────────────────────────────
     const micBtn = document.getElementById('micBtn');
     const micHint = document.getElementById('micHint');
     const statusDot = document.getElementById('statusDot');
@@ -407,13 +832,137 @@
     const errorMsg = document.getElementById('errorMsg');
     const injectionMode = document.getElementById('injectionMode');
     const autoSpaceToggle = document.getElementById('autoSpaceToggle');
+    const themeSelect = document.getElementById('themeSelect');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    const recTimerEl = document.getElementById('recTimer');
 
     let isRecording = false;
     let currentText = '';
+    let hotkeyTriggered = false;
 
-    // --- Startup ---
+    // ── Animated Progress Bar ───────────────────────────────────────────
+    let progressAnimFrame = null;
+    let progressCurrent = 0;
+    let progressTarget = 90;
+    let recordingStartTime = null;
+
+    function startAnimatedProgress(audioDurationSec) {
+      const estimatedMs = Math.max(audioDurationSec * 500, 2000);
+      progressCurrent = 0;
+      progressTarget = 70;
+      progressBar.classList.remove('done');
+      progressFill.style.transition = 'none';
+      progressFill.style.width = '0%';
+      const startTime = performance.now();
+      function animate(now) {
+        const elapsed = now - startTime;
+        const fraction = Math.min(elapsed / estimatedMs, 1);
+        // Slow logarithmic curve — steady crawl, no sudden stall
+        const eased = Math.log(1 + fraction * 9) / Math.log(10);
+        const pct = eased * progressTarget;
+        if (pct > progressCurrent) progressCurrent = pct;
+        progressFill.style.width = progressCurrent + '%';
+        if (fraction < 1) progressAnimFrame = requestAnimationFrame(animate);
+      }
+      progressAnimFrame = requestAnimationFrame(animate);
+    }
+
+    function onServerProgress(pct) {
+      if (pct > progressCurrent) {
+        progressCurrent = pct;
+        progressFill.style.width = pct + '%';
+      }
+    }
+
+    function completeProgress() {
+      if (progressAnimFrame) { cancelAnimationFrame(progressAnimFrame); progressAnimFrame = null; }
+      progressFill.style.transition = 'width 0.3s ease';
+      progressFill.style.width = '100%';
+      progressBar.classList.add('done');
+      setTimeout(() => {
+        progressFill.style.width = '0%';
+        progressBar.classList.remove('done');
+        setTimeout(() => { progressFill.style.transition = 'none'; }, 300);
+      }, 800);
+    }
+
+    function resetProgress() {
+      if (progressAnimFrame) { cancelAnimationFrame(progressAnimFrame); progressAnimFrame = null; }
+      progressFill.style.transition = 'width 0.3s ease';
+      progressFill.style.width = '0%';
+      progressBar.classList.remove('done');
+      setTimeout(() => { progressFill.style.transition = 'none'; }, 300);
+    }
+
+    // ── Sound Effects (Web Audio API) ──────────────────────────────────
+    let soundEnabled = localStorage.getItem('deskmic-sound') === 'true';
+    let audioCtx = null;
+
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new AudioContext();
+      return audioCtx;
+    }
+
+    function playTone(freq, startTime, duration, gain) {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const vol = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      vol.gain.setValueAtTime(gain, startTime);
+      vol.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      osc.connect(vol);
+      vol.connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    }
+
+    function soundRecordStart() {
+      if (!soundEnabled) return;
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      playTone(523, now, 0.12, 0.15);       // C5
+      playTone(659, now + 0.1, 0.12, 0.15); // E5
+    }
+
+    function soundRecordStop() {
+      if (!soundEnabled) return;
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      playTone(659, now, 0.12, 0.12);       // E5
+      playTone(523, now + 0.1, 0.12, 0.12); // C5
+    }
+
+    function soundComplete() {
+      if (!soundEnabled) return;
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      playTone(523, now, 0.15, 0.12);        // C5
+      playTone(659, now + 0.12, 0.15, 0.12); // E5
+      playTone(784, now + 0.24, 0.25, 0.14); // G5
+    }
+
+    function soundError() {
+      if (!soundEnabled) return;
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      playTone(330, now, 0.3, 0.1); // E4 low soft tone
+    }
+
+    // ── Startup ─────────────────────────────────────────────────────────
     async function init() {
       setStatus('loading', 'Loading whisper model...');
+
+      await listen('transcribe-progress', (event) => {
+        onServerProgress(event.payload);
+      });
+
+      await listen('toggle-recording', () => {
+        if (micBtn.classList.contains('disabled')) return;
+        hotkeyTriggered = true;
+        micBtn.click();
+      });
 
       await listen('model-ready', (event) => {
         if (event.payload === 'ok') {
@@ -427,7 +976,7 @@
       });
     }
 
-    // --- Status ---
+    // ── Status ──────────────────────────────────────────────────────────
     function setStatus(state, text) {
       statusDot.className = 'status-dot ' + state;
       statusText.textContent = text;
@@ -445,7 +994,33 @@
       setTimeout(() => errorMsg.classList.remove('visible'), 5000);
     }
 
-    // --- Recording ---
+    // ── Recording Timer ─────────────────────────────────────────────────
+    let recTimerInterval = null;
+
+    function startRecTimer() {
+      const start = Date.now();
+      recTimerEl.textContent = '0:00';
+      recTimerEl.classList.remove('warning');
+      recTimerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - start) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        recTimerEl.textContent = mins + ':' + String(secs).padStart(2, '0');
+        if (elapsed >= 120) {
+          recTimerEl.classList.add('warning');
+          if (elapsed === 120) showHint('Long recording \u2014 longer audio takes longer to process');
+        }
+      }, 1000);
+    }
+
+    function stopRecTimer() {
+      if (recTimerInterval) clearInterval(recTimerInterval);
+      recTimerInterval = null;
+      recTimerEl.textContent = '';
+      recTimerEl.classList.remove('warning');
+    }
+
+    // ── Recording ───────────────────────────────────────────────────────
     micBtn.addEventListener('click', async () => {
       if (micBtn.classList.contains('disabled')) return;
 
@@ -453,11 +1028,14 @@
         try {
           await invoke('start_recording');
           isRecording = true;
+          soundRecordStart();
+          recordingStartTime = Date.now();
           micBtn.classList.add('recording');
           micHint.textContent = 'Recording... click again to stop';
           setStatus('recording', 'Recording...');
           hintMsg.classList.remove('visible');
           errorMsg.classList.remove('visible');
+          startRecTimer();
         } catch (e) {
           showError('Failed to start recording: ' + e);
         }
@@ -467,22 +1045,41 @@
         micBtn.classList.add('disabled');
         micHint.textContent = 'Transcribing...';
         setStatus('transcribing', 'Transcribing...');
+        stopRecTimer();
+        soundRecordStop();
+        const recDurationSec = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 3;
+        startAnimatedProgress(recDurationSec);
 
         try {
           const text = await invoke('stop_and_transcribe');
+          completeProgress();
+          soundComplete();
           currentText = text;
           transcript.textContent = text;
           transcript.classList.remove('empty');
           injectBtn.disabled = false;
           clearBtn.disabled = false;
-          micHint.textContent = 'Click to record again';
           setStatus('ready', 'Ready');
+
+          // Auto-inject when triggered by hotkey (user is already in target app)
+          if (hotkeyTriggered) {
+            hotkeyTriggered = false;
+            try {
+              await invoke('inject_text', { text });
+              micHint.textContent = 'Inserted! Press hotkey to record again';
+            } catch (e) {
+              micHint.textContent = 'Transcribed (injection failed)';
+            }
+          } else {
+            micHint.textContent = 'Click to record again';
+          }
         } catch (e) {
+          resetProgress();
+          soundError();
           const err = '' + e;
           micHint.textContent = 'Click to start recording';
           setStatus('ready', 'Ready');
 
-          // "hint:" prefix = gentle, expected situations
           if (err.startsWith('hint:')) {
             showHint(err.substring(5));
           } else {
@@ -494,7 +1091,7 @@
       }
     });
 
-    // --- Inject ---
+    // ── Inject ──────────────────────────────────────────────────────────
     injectBtn.addEventListener('click', async () => {
       if (!currentText) return;
       injectBtn.disabled = true;
@@ -516,7 +1113,7 @@
       }
     });
 
-    // --- Clear ---
+    // ── Clear ───────────────────────────────────────────────────────────
     clearBtn.addEventListener('click', () => {
       currentText = '';
       transcript.textContent = 'Transcribed text will appear here';
@@ -525,8 +1122,27 @@
       clearBtn.disabled = true;
     });
 
-    // --- Settings ---
+    // ── Settings Modal ──────────────────────────────────────────────────
+    const settingsOverlay = document.getElementById('settingsOverlay');
+
+    document.getElementById('settingsBtn').addEventListener('click', () => {
+      settingsOverlay.classList.add('visible');
+    });
+
+    document.getElementById('closeSettings').addEventListener('click', () => {
+      settingsOverlay.classList.remove('visible');
+    });
+
+    settingsOverlay.addEventListener('click', (e) => {
+      if (e.target === settingsOverlay) settingsOverlay.classList.remove('visible');
+    });
+
+    // ── Settings Controls ───────────────────────────────────────────────
     const micDevice = document.getElementById('micDevice');
+
+    themeSelect.addEventListener('change', () => {
+      applyTheme(themeSelect.value);
+    });
 
     injectionMode.addEventListener('change', async () => {
       await invoke('set_injection_mode', { mode: injectionMode.value });
@@ -535,6 +1151,34 @@
     autoSpaceToggle.addEventListener('click', async () => {
       const isOn = autoSpaceToggle.classList.toggle('on');
       await invoke('set_auto_space', { enabled: isOn });
+    });
+
+    const hotkeySelect = document.getElementById('hotkeySelect');
+    hotkeySelect.addEventListener('change', async () => {
+      try {
+        await invoke('set_hotkey', { preset: hotkeySelect.value });
+        localStorage.setItem('deskmic-hotkey', hotkeySelect.value);
+      } catch (e) {
+        showError('Hotkey failed: ' + e);
+      }
+    });
+
+    const soundToggle = document.getElementById('soundToggle');
+    if (soundEnabled) soundToggle.classList.add('on');
+    soundToggle.addEventListener('click', () => {
+      soundEnabled = soundToggle.classList.toggle('on');
+      localStorage.setItem('deskmic-sound', soundEnabled);
+    });
+
+    const autostartToggle = document.getElementById('autostartToggle');
+    autostartToggle.addEventListener('click', async () => {
+      const isOn = autostartToggle.classList.toggle('on');
+      try {
+        await invoke('set_autostart', { enabled: isOn });
+      } catch (e) {
+        autostartToggle.classList.toggle('on'); // revert
+        showError('Autostart failed: ' + e);
+      }
     });
 
     micDevice.addEventListener('change', async () => {
@@ -556,7 +1200,7 @@
       } catch (e) { /* ignore */ }
     }
 
-    // --- Phone connection info + cert status ---
+    // ── Phone Connection Info ───────────────────────────────────────────
     const lanUrlEl = document.getElementById('lanUrl');
     const tailscaleSectionEl = document.getElementById('tailscaleSection');
     const tailscaleUrlEl = document.getElementById('tailscaleUrl');
@@ -564,7 +1208,6 @@
     const certHelp = document.getElementById('certHelp');
 
     async function loadServerInfo() {
-      // LAN URL (always available)
       try {
         const url = await invoke('get_server_url');
         if (url) lanUrlEl.textContent = url;
@@ -572,7 +1215,6 @@
         lanUrlEl.textContent = 'Not available';
       }
 
-      // Tailscale URL (shown only when available)
       try {
         const tsUrl = await invoke('get_tailscale_url');
         if (tsUrl) {
@@ -586,7 +1228,6 @@
         certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> \u2192 <b>visit this website</b> to proceed.';
       }
 
-      // Sync auto-space toggle with backend
       try {
         const autoSpace = await invoke('get_auto_space');
         if (autoSpace) {
@@ -596,13 +1237,12 @@
         }
       } catch (e) { /* ignore */ }
 
-      // GPU status
       try {
         const gpu = await invoke('get_gpu_status');
         const gpuEl = document.getElementById('gpuStatus');
         if (gpu.active === true) {
           gpuEl.textContent = 'GPU acceleration active';
-          gpuEl.style.color = '#4ecca3';
+          gpuEl.className = 'info-text accent';
         } else if (gpu.compiled) {
           gpuEl.textContent = 'GPU compiled but using CPU (no compatible GPU found)';
         } else {
@@ -616,20 +1256,38 @@
         const count = await invoke('get_connected_phones');
         if (count > 0) {
           phoneStatusEl.textContent = count + ' phone' + (count > 1 ? 's' : '') + ' connected';
-          phoneStatusEl.style.color = '#4ecca3';
+          phoneStatusEl.className = 'info-text accent';
         } else {
           phoneStatusEl.textContent = 'No phone connected';
-          phoneStatusEl.style.color = '#666';
+          phoneStatusEl.className = 'info-text muted';
         }
       } catch (e) { /* ignore */ }
     }
 
     setInterval(pollPhoneStatus, 2000);
 
-    // --- Go ---
+    // ── Init ────────────────────────────────────────────────────────────
+    async function loadHotkey() {
+      const saved = localStorage.getItem('deskmic-hotkey') || 'Ctrl+Shift+Space';
+      hotkeySelect.value = saved;
+      try {
+        await invoke('set_hotkey', { preset: saved });
+      } catch (e) { /* ignore */ }
+    }
+
+    async function loadAutostartState() {
+      try {
+        const enabled = await invoke('get_autostart');
+        if (enabled) autostartToggle.classList.add('on');
+      } catch (e) { /* ignore */ }
+    }
+
+    applyTheme(localStorage.getItem('deskmic-theme') || 'deskmic-dark');
     init();
     loadServerInfo();
     loadAudioDevices();
+    loadAutostartState();
+    loadHotkey();
   </script>
 </body>
 </html>

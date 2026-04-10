@@ -9,6 +9,7 @@ use axum::routing::get;
 use axum::Router;
 use axum_server::tls_rustls::RustlsConfig;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
@@ -194,16 +195,51 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                     ))
                     .await;
 
-                // Transcribe
-                let text = {
-                    let guard = state.transcriber.lock().unwrap();
+                // Transcribe with progress reporting
+                let progress = Arc::new(AtomicI32::new(0));
+                let transcriber = state.transcriber.clone();
+                let progress_cb = progress.clone();
+
+                let mut transcribe_handle = tokio::task::spawn_blocking(move || {
+                    let guard = transcriber.lock().unwrap();
                     match guard.as_ref() {
-                        Some(t) => match t.transcribe(&samples) {
+                        Some(t) => match t.transcribe_with_progress(&samples, move |pct| {
+                            progress_cb.store(pct, Ordering::Relaxed);
+                        }) {
                             Ok(result) if !result.text.is_empty() => Ok(result.text),
                             Ok(_) => Err("no_speech".to_string()),
                             Err(e) => Err(format!("Transcription failed: {e}")),
                         },
                         None => Err("model_loading".to_string()),
+                    }
+                });
+
+                // Poll progress and forward to phone while transcription runs
+                let mut last_pct = -1i32;
+                let text = loop {
+                    tokio::select! {
+                        result = &mut transcribe_handle => {
+                            // Send 100% before breaking
+                            let _ = socket
+                                .send(Message::Text(
+                                    serde_json::json!({"type": "progress", "percent": 100})
+                                        .to_string().into(),
+                                ))
+                                .await;
+                            break result.unwrap_or(Err("Transcription thread panicked".to_string()));
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                            let pct = progress.load(Ordering::Relaxed);
+                            if pct != last_pct {
+                                last_pct = pct;
+                                let _ = socket
+                                    .send(Message::Text(
+                                        serde_json::json!({"type": "progress", "percent": pct})
+                                            .to_string().into(),
+                                    ))
+                                    .await;
+                            }
+                        }
                     }
                 };
 

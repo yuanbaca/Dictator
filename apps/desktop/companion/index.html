@@ -159,6 +159,30 @@
     .toast.error { background: rgba(231, 76, 60, 0.9); }
     .toast.hint { background: rgba(100, 100, 120, 0.9); }
 
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: transparent;
+      overflow: hidden;
+    }
+
+    .progress-bar .fill {
+      height: 100%;
+      width: 0%;
+      background: #3498db;
+    }
+
+    .progress-bar.done .fill { background: #4ecca3; }
+
+    .rec-timer {
+      font-size: 13px;
+      color: #999;
+      font-variant-numeric: tabular-nums;
+      min-height: 18px;
+    }
+
+    .rec-timer.warning { color: #f0a500; }
+
     .controls-area {
       padding: 0 24px 16px;
       display: flex;
@@ -233,10 +257,13 @@
     <span id="statusText">Connecting...</span>
   </div>
 
+  <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+
   <div class="main-area">
     <button class="mic-button disabled" id="micBtn">
       <span class="mic-icon">🎙</span>
     </button>
+    <div class="rec-timer" id="recTimer"></div>
     <div class="mic-hint" id="micHint">Connecting to desktop...</div>
 
     <div class="transcript-area empty" id="transcript">
@@ -272,6 +299,91 @@
     let mediaStream = null;
     let recorder = null; // ScriptProcessorNode
     let recordedSamples = [];
+    let recStartTime = null;
+    let recTimerInterval = null;
+    const recTimerEl = document.getElementById('recTimer');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+
+    // --- Animated progress bar ---
+    // Estimates completion time from audio duration so the bar visibly fills,
+    // even when Whisper finishes nearly instantly on fast hardware.
+    let progressAnimFrame = null;
+    let progressCurrent = 0;
+    let progressTarget = 90;
+    let lastAudioDurationSec = 0;
+
+    function startAnimatedProgress(audioDurationSec) {
+      const estimatedMs = Math.max(audioDurationSec * 300, 1500);
+      progressCurrent = 0;
+      progressTarget = 90;
+      progressBar.classList.remove('done');
+      progressFill.style.transition = 'none';
+      progressFill.style.width = '0%';
+      const startTime = performance.now();
+      function animate(now) {
+        const elapsed = now - startTime;
+        const fraction = Math.min(elapsed / estimatedMs, 1);
+        const eased = 1 - Math.pow(1 - fraction, 3); // ease-out: fast start, slows down
+        const pct = eased * progressTarget;
+        if (pct > progressCurrent) progressCurrent = pct;
+        progressFill.style.width = progressCurrent + '%';
+        if (fraction < 1) progressAnimFrame = requestAnimationFrame(animate);
+      }
+      progressAnimFrame = requestAnimationFrame(animate);
+    }
+
+    function onServerProgress(pct) {
+      if (pct > progressCurrent) {
+        progressCurrent = pct;
+        progressFill.style.width = pct + '%';
+      }
+    }
+
+    function completeProgress() {
+      if (progressAnimFrame) { cancelAnimationFrame(progressAnimFrame); progressAnimFrame = null; }
+      progressFill.style.transition = 'width 0.3s ease';
+      progressFill.style.width = '100%';
+      progressBar.classList.add('done');
+      setTimeout(() => {
+        progressFill.style.width = '0%';
+        progressBar.classList.remove('done');
+        setTimeout(() => { progressFill.style.transition = 'none'; }, 300);
+      }, 800);
+    }
+
+    function resetProgress() {
+      if (progressAnimFrame) { cancelAnimationFrame(progressAnimFrame); progressAnimFrame = null; }
+      progressFill.style.transition = 'width 0.3s ease';
+      progressFill.style.width = '0%';
+      progressBar.classList.remove('done');
+      setTimeout(() => { progressFill.style.transition = 'none'; }, 300);
+    }
+
+    // --- Recording timer ---
+    function startRecTimer() {
+      recStartTime = Date.now();
+      recTimerEl.textContent = '0:00';
+      recTimerEl.classList.remove('warning');
+      recTimerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - recStartTime) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        recTimerEl.textContent = mins + ':' + String(secs).padStart(2, '0');
+        // Soft warning at 2 minutes
+        if (elapsed >= 120 && !recTimerEl.classList.contains('warning')) {
+          recTimerEl.classList.add('warning');
+          showToast('Long recording \u2014 longer audio takes longer to process', 'hint');
+        }
+      }, 1000);
+    }
+
+    function stopRecTimer() {
+      if (recTimerInterval) clearInterval(recTimerInterval);
+      recTimerInterval = null;
+      recTimerEl.textContent = '';
+      recTimerEl.classList.remove('warning');
+    }
 
     // --- WebSocket ---
     function connect() {
@@ -301,8 +413,10 @@
           } else if (msg.state === 'transcribing') {
             setStatus('transcribing', 'Transcribing...');
             micHint.textContent = 'Processing your speech...';
+            startAnimatedProgress(lastAudioDurationSec);
           }
         } else if (msg.type === 'result') {
+          completeProgress();
           transcript.textContent = msg.text;
           transcript.classList.remove('empty');
           transcript.classList.add('success');
@@ -316,16 +430,19 @@
           setStatus('connected', 'Ready — tap the mic');
           micBtn.classList.remove('disabled');
         } else if (msg.type === 'hint') {
-          // Gentle, non-alarming feedback (too short, no speech, etc.)
+          resetProgress();
           showToast(msg.message, 'hint');
           setStatus('connected', 'Ready — tap the mic');
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Tap to try again';
         } else if (msg.type === 'error') {
+          resetProgress();
           showToast(msg.message, 'error');
           setStatus('connected', 'Ready — tap the mic');
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Tap to try again';
+        } else if (msg.type === 'progress') {
+          onServerProgress(msg.percent);
         } else if (msg.type === 'setting' && msg.key === 'auto_space') {
           // Sync toggle with desktop setting
           if (msg.value) {
@@ -395,6 +512,7 @@
         micBtn.classList.add('recording');
         micHint.textContent = 'Recording... tap to stop';
         setStatus('recording', 'Recording...');
+        startRecTimer();
       } catch (err) {
         showToast('Microphone access denied. Please allow microphone access.', 'error');
       }
@@ -405,6 +523,7 @@
       micBtn.classList.remove('recording');
       micBtn.classList.add('disabled');
       micHint.textContent = 'Sending audio...';
+      stopRecTimer();
 
       // Stop recording
       if (recorder) {
@@ -423,6 +542,7 @@
       // Merge all recorded chunks into a single Float32Array
       let totalLength = 0;
       for (const chunk of recordedSamples) totalLength += chunk.length;
+      lastAudioDurationSec = totalLength / 16000;
 
       const merged = new Float32Array(totalLength);
       let offset = 0;

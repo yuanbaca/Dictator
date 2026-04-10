@@ -91,6 +91,18 @@ impl Transcriber {
     ///
     /// `samples` must be mono f32 audio at 16kHz sample rate.
     pub fn transcribe(&self, samples: &[f32]) -> Result<TranscriptResult> {
+        self.transcribe_with_progress(samples, |_| {})
+    }
+
+    /// Transcribe audio samples with a progress callback (0-100%).
+    pub fn transcribe_with_progress<F>(
+        &self,
+        samples: &[f32],
+        on_progress: F,
+    ) -> Result<TranscriptResult>
+    where
+        F: FnMut(i32) + 'static,
+    {
         let mut state = self
             .ctx
             .create_state()
@@ -104,8 +116,10 @@ impl Transcriber {
         // Enable token-level timestamps
         params.set_token_timestamps(true);
 
-        // Print progress to stderr for debugging
-        params.set_print_progress(true);
+        // Progress callback
+        params.set_progress_callback_safe(on_progress);
+
+        params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_print_special(false);
@@ -143,11 +157,48 @@ impl Transcriber {
             });
         }
 
+        let text = full_text.trim().to_string();
+
         Ok(TranscriptResult {
-            text: full_text.trim().to_string(),
+            text: if is_whisper_hallucination(&text) {
+                String::new()
+            } else {
+                text
+            },
             segments,
         })
     }
+}
+
+/// Whisper outputs these patterns when it hears silence or noise instead of
+/// speech.  We treat them as "no speech" rather than real transcription.
+fn is_whisper_hallucination(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let trimmed = lower.trim().trim_matches(|c: char| c == '.' || c == '!' || c == ' ');
+
+    // Bracketed/parenthesized tags Whisper emits for non-speech
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return true; // [BLANK_AUDIO], [silence], [music], etc.
+    }
+    if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        return true; // (blank audio), (silence), (music), etc.
+    }
+
+    // Common hallucinated phrases from Whisper's YouTube subtitle training data
+    let hallucinations = [
+        "thank you",
+        "thanks for watching",
+        "thank you for watching",
+        "subscribe",
+        "like and subscribe",
+        "subtitles by",
+        "translated by",
+        "amara.org",
+        "www.mooji.org",
+        "you",
+    ];
+
+    hallucinations.iter().any(|h| trimmed == *h)
 }
 
 /// Load a WAV file and convert to mono f32 samples at 16kHz.
