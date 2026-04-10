@@ -538,6 +538,26 @@
       transition: left 0.2s;
     }
     .toggle.on::after { left: 20px; }
+
+    #setupOverlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 9999;
+      background: var(--bg);
+      padding: 24px;
+      overflow-y: auto;
+      flex-direction: column;
+      align-items: center;
+    }
+    #setupOverlay.visible {
+      display: flex;
+    }
   </style>
 </head>
 <body>
@@ -557,9 +577,9 @@
   <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
 
   <!-- First-run setup overlay (shown when no Whisper model is installed) -->
-  <div id="setupOverlay" style="display:none; position:fixed; inset:0; z-index:100; background:var(--bg); padding:24px; overflow-y:auto;">
-    <div style="max-width:360px; margin:0 auto;">
-      <div style="text-align:center; margin-bottom:20px;">
+  <div id="setupOverlay">
+    <div style="max-width:360px; width:100%; text-align:center;">
+      <div style="margin-bottom:20px;">
         <img src="dictatorhat.png" alt="" style="width:48px; height:48px; margin-bottom:8px;">
         <h2 style="font-size:18px; margin-bottom:4px;">Welcome to Dictator</h2>
         <p style="font-size:13px; color:var(--text-dim);">Download a speech recognition model to get started.</p>
@@ -1190,7 +1210,7 @@
 
       await listen('model-ready', (event) => {
         if (event.payload === 'ok') {
-          document.getElementById('setupOverlay').style.display = 'none';
+          document.getElementById('setupOverlay').classList.remove('visible');
           document.querySelector('.header').style.display = '';
           clearInterval(pollStatus);
           setStatus('ready', 'Ready \u2014 click the mic to record');
@@ -1217,6 +1237,11 @@
             setStatus('ready', 'Ready \u2014 click the mic to record');
             micBtn.classList.remove('disabled');
             micHint.textContent = 'Click to start recording';
+          } else if (status === 'no-model') {
+            clearInterval(pollStatus);
+            setStatus('loading', 'No speech model installed');
+            micHint.textContent = 'Download a model to get started';
+            showSetupOverlay();
           } else if (status.startsWith('error:')) {
             clearInterval(pollStatus);
             setStatus('loading', 'Model failed to load');
@@ -1235,7 +1260,7 @@
       const dlFill = document.getElementById('setupDownloadFill');
       const dlStatus = document.getElementById('setupDownloadStatus');
 
-      overlay.style.display = '';
+      overlay.classList.add('visible');
       document.querySelector('.header').style.display = 'none';
 
       try {

@@ -56,6 +56,8 @@ struct AppState {
     llm_status: Arc<Mutex<Option<bool>>>,
     /// LLM error message if loading failed
     llm_error: Mutex<Option<String>>,
+    /// True when no whisper model was found at startup
+    no_model: Mutex<bool>,
 }
 
 const LAN_PORT: u16 = 3456;
@@ -67,6 +69,10 @@ const TAILSCALE_PORT: u16 = 3457;
 fn get_status(state: State<AppState>) -> String {
     if let Some(err) = state.model_error.lock().unwrap().as_ref() {
         return format!("error:{err}");
+    }
+
+    if *state.no_model.lock().unwrap() {
+        return "no-model".into();
     }
 
     let has_model = state.transcriber.lock().unwrap().is_some();
@@ -547,6 +553,7 @@ fn load_whisper_model(state: State<AppState>, app_handle: tauri::AppHandle) -> R
     let model_path = model_manager::find_whisper_model()
         .ok_or("No whisper model found")?;
 
+    *state.no_model.lock().unwrap() = false;
     let transcriber_handle = state.transcriber.clone();
     let gpu_handle = state.using_gpu.clone();
 
@@ -997,6 +1004,7 @@ fn main() {
             formatter: formatter.clone(),
             llm_status: Arc::new(Mutex::new(None)),
             llm_error: Mutex::new(None),
+            no_model: Mutex::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -1085,6 +1093,10 @@ fn main() {
                 });
             } else {
                 eprintln!("No whisper model found — waiting for user to download one");
+                {
+                    let state: State<AppState> = app_handle.state();
+                    *state.no_model.lock().unwrap() = true;
+                }
                 let _ = app_handle.emit("model-ready", "no-model");
             }
 
