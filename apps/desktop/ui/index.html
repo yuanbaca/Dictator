@@ -2376,7 +2376,9 @@
         versionInfo.textContent = 'v' + ver + ' — checking…';
         const info = await invoke('check_for_updates');
         if (info.update_available) {
-          versionInfo.innerHTML = 'v' + info.current + ' — <a href="' + info.url + '" target="_blank" style="color:var(--accent);">v' + info.latest + ' available</a>';
+          versionInfo.innerHTML = 'v' + info.current + ' — v' + info.latest + ' available! '
+            + '<button onclick="navigator.clipboard.writeText(\'' + info.url + '\').then(()=>{this.textContent=\'Copied!\'}).catch(()=>{})" '
+            + 'style="background:var(--accent);color:var(--bg);border:none;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">Copy link</button>';
         } else if (info.latest) {
           versionInfo.textContent = 'v' + info.current + ' — up to date';
         } else {
