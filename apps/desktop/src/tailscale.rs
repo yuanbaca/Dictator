@@ -32,23 +32,52 @@ struct TsSelfNode {
     tailscale_ips: Option<Vec<String>>,
 }
 
-/// Detect whether Tailscale is installed and running. Returns `Some(info)` if it is.
-pub fn detect() -> Option<TailscaleInfo> {
+/// Result of checking Tailscale status.
+pub enum DetectResult {
+    /// Tailscale is running and HTTPS is enabled.
+    Ok(TailscaleInfo),
+    /// Tailscale binary not found on the system.
+    NotInstalled,
+    /// Tailscale is installed but not running/connected.
+    NotRunning(String),
+    /// Tailscale is running but HTTPS certificates are not enabled.
+    NoHttps,
+}
+
+/// Detect whether Tailscale is installed, running, and has HTTPS enabled.
+pub fn detect() -> DetectResult {
     eprintln!("Checking for Tailscale...");
 
-    let stdout = run_tailscale(&["status", "--json"])?;
-    let status: TsStatus = serde_json::from_slice(&stdout)
-        .map_err(|e| eprintln!("Failed to parse tailscale status JSON: {e}"))
-        .ok()?;
+    let stdout = match run_tailscale(&["status", "--json"]) {
+        Some(s) => s,
+        None => return DetectResult::NotInstalled,
+    };
+
+    let status: TsStatus = match serde_json::from_slice(&stdout) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to parse tailscale status JSON: {e}");
+            return DetectResult::NotInstalled;
+        }
+    };
 
     if status.backend_state != "Running" {
         eprintln!("Tailscale state is '{}', not Running", status.backend_state);
-        return None;
+        return DetectResult::NotRunning(status.backend_state);
     }
 
-    let self_node = status.self_node?;
-    let cert_domains = status.cert_domains.filter(|d| !d.is_empty())?;
-    let cert_domain = cert_domains.first()?.clone();
+    let self_node = match status.self_node {
+        Some(n) => n,
+        None => return DetectResult::NotRunning("No self node".into()),
+    };
+
+    let cert_domains = status.cert_domains.unwrap_or_default();
+    if cert_domains.is_empty() {
+        eprintln!("Tailscale is running but HTTPS (CertDomains) is not enabled");
+        return DetectResult::NoHttps;
+    }
+
+    let cert_domain = cert_domains.first().unwrap().clone();
 
     let info = TailscaleInfo {
         dns_name: self_node.dns_name.trim_end_matches('.').to_string(),
@@ -60,7 +89,7 @@ pub fn detect() -> Option<TailscaleInfo> {
         "Tailscale detected: domain={}, ips={:?}",
         info.cert_domain, info.tailscale_ips
     );
-    Some(info)
+    DetectResult::Ok(info)
 }
 
 /// Generate a TLS certificate via `tailscale cert`. Returns (cert_pem, key_pem) bytes.

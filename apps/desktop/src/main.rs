@@ -136,15 +136,25 @@ fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, Str
     let state: State<AppState> = app_handle.state();
     let was_running = state.tailscale_server_running.load(Ordering::Relaxed);
 
-    let ts_info = tailscale::detect();
-
-    let ts = match ts_info {
-        Some(ts) => ts,
-        None => {
+    let ts = match tailscale::detect() {
+        tailscale::DetectResult::Ok(ts) => ts,
+        tailscale::DetectResult::NotInstalled => {
             *state.tailscale_url.lock().unwrap() = None;
             *state.tailscale_cert_generated.lock().unwrap() = None;
             let _ = app_handle.emit("tailscale-changed", "");
-            return Err("Tailscale is not installed or not connected. Install Tailscale on both your PC and phone, then try again.".to_string());
+            return Err("Tailscale is not installed. Install it from tailscale.com on both your PC and phone.".to_string());
+        }
+        tailscale::DetectResult::NotRunning(s) => {
+            *state.tailscale_url.lock().unwrap() = None;
+            *state.tailscale_cert_generated.lock().unwrap() = None;
+            let _ = app_handle.emit("tailscale-changed", "");
+            return Err(format!("Tailscale is installed but not connected (state: {s}). Open Tailscale and sign in."));
+        }
+        tailscale::DetectResult::NoHttps => {
+            *state.tailscale_url.lock().unwrap() = None;
+            *state.tailscale_cert_generated.lock().unwrap() = None;
+            let _ = app_handle.emit("tailscale-changed", "");
+            return Err("Tailscale is running but HTTPS is not enabled. Go to login.tailscale.com/admin/dns, scroll to HTTPS Certificates, and click Enable.".to_string());
         }
     };
 
