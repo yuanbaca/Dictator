@@ -1,53 +1,56 @@
 # Dictator
 
-Speak into your phone, text appears at your cursor on Windows.
+**What you say goes... (to your cursor)**
 
-Your phone acts as a wireless microphone. Audio is sent to your PC over your local network (or Tailscale), transcribed locally using Whisper, and injected into whatever app has focus.
+Voice-to-text for Windows — dictate from your computer with a hotkey, or from your phone as a wireless mic. Text appears wherever your cursor is. All processing happens locally on your machine. No cloud, no accounts, no data leaves your network.
 
-**All processing happens on your machine. No cloud services, no accounts, no data leaves your network.**
+## Two Ways to Dictate
+
+### From Your Computer (hotkey)
+Press a hotkey (default: `Ctrl+Shift+Space`), speak into your PC's microphone, press again — text appears at your cursor. Works in any app: Notepad, Word, browser, chat, IDE, anywhere.
+
+### From Your Phone (wireless mic)
+Open the URL shown in the app on your phone's browser, tap the mic button and speak. Your phone acts as a wireless microphone over your local network, and text appears at your cursor on your PC.
+
+## Features
+
+- **Local speech-to-text** via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — no internet required, multiple model sizes (tiny to large)
+- **AI text formatting** — optional local LLM (llama.cpp) cleans up, rephrases, or reformats your dictation before insertion. Multiple presets: clean up, professional, casual, bullet points, and more. Downloads a ~2 GB model on first use.
+- **Neural text-to-speech** — highlight text anywhere and hear it read aloud using [Piper](https://github.com/rhasspy/piper) neural voices or Windows SAPI. Pause/resume with the same hotkey. 10+ downloadable voice models.
+- **Configurable hotkeys** — record, inject text, and read-aloud each have their own global hotkey. Works from any app without switching windows.
+- **AI formatting from the system tray** — left-click the tray icon to toggle auto-format, right-click to pick a format preset (clean up, email, meeting notes, documentation, message)
+- **Text injection** via clipboard paste or simulated keystrokes
+- **Auto-space** after each dictation (toggleable)
+- **Escape key** cancels recording or stops TTS playback — works globally, even when Dictator isn't focused
+- **Phone companion** web app with recording, key buttons, and read-aloud trigger
+- **Two connection options** for phone:
+  - **LAN** (port 3456) — self-signed cert, same WiFi, works immediately
+  - **Tailscale** (port 3457) — trusted cert, works from anywhere, no browser warnings
+- **Optional GPU acceleration** via Vulkan
+- **First-run model download** — the app downloads what it needs on first launch; no manual setup
 
 ## How It Works
 
 1. Run Dictator on your Windows PC
-2. Open the URL shown in the app on your phone's browser
-3. Tap the mic button on your phone and speak
-4. Text appears at your cursor on your PC
-
-## Features
-
-- Local speech-to-text via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) (no internet required)
-- **AI text formatting** — optional local LLM (llama.cpp) cleans up, rephrases, or reformats your dictation before insertion. Multiple presets: clean up, professional, casual, bullet points, and more. Downloads a ~2 GB model on first use.
-- **Neural text-to-speech** — highlight text anywhere and hear it read aloud using [Piper](https://github.com/rhasspy/piper) neural voices or Windows SAPI. Pause/resume with the same hotkey. 10+ downloadable voice models.
-- Text injection via clipboard paste or simulated keystrokes
-- Auto-space after each dictation (toggleable)
-- Escape key cancels recording or stops TTS playback
-- Configurable hotkeys for recording, text injection, and read-aloud
-- Two connection options:
-  - **LAN** (port 3456) -- self-signed cert, same WiFi, works immediately
-  - **Tailscale** (port 3457) -- trusted cert, works from anywhere, no browser warnings
-- Optional GPU acceleration via Vulkan
-- Phone companion web app with recording, key buttons, and read-aloud trigger
+2. **Desktop dictation**: Press `Ctrl+Shift+Space` (or your configured hotkey), speak, press again — text is inserted at your cursor
+3. **Phone dictation**: Open the URL shown in the app on your phone's browser, tap the mic button, speak — text appears on your PC
+4. **Read aloud**: Highlight text in any app, press the read-aloud hotkey — hear it spoken with neural TTS
+5. **AI formatting**: Enable auto-format in Settings or via the tray icon — dictation is cleaned up by a local LLM before insertion
 
 ## Requirements
 
-### Build Requirements
+### Runtime
+- Windows 10/11
+- Phone and PC on the same WiFi network (for phone dictation via LAN)
 
+### Build
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [Node.js](https://nodejs.org/) (LTS, for Tauri CLI)
 - [CMake](https://cmake.org/download/)
-- [LLVM/Clang](https://releases.llvm.org/) (for bindgen -- install to `C:\Program Files\LLVM`)
+- [LLVM/Clang](https://releases.llvm.org/) (for bindgen — install to `C:\Program Files\LLVM`)
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with "Desktop development with C++"
-- Whisper model file: `models/ggml-base.en.bin` (download from the [whisper.cpp models page](https://huggingface.co/ggerganov/whisper.cpp/tree/main))
-
-### Runtime Requirements
-
-- Windows 10/11
-- The whisper model file (`models/ggml-base.en.bin`) must be present relative to the executable
-- Phone and PC on the same WiFi network (for LAN mode)
-- Windows Firewall must allow inbound TCP on port 3456 (and 3457 if using Tailscale)
 
 ### Optional
-
 - [Tailscale](https://tailscale.com/) on both PC and phone for trusted HTTPS and remote access
 - [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) for GPU-accelerated transcription
 
@@ -80,7 +83,7 @@ Or directly: `apps\desktop\target\release\dictator.exe`
 When you open the URL on your phone, the browser needs HTTPS to access the microphone. Dictator handles this automatically:
 
 - **LAN mode**: Your phone will show a "not private" warning. Accept it once (iPhone: Show Details > visit this website; Android: Advanced > Proceed).
-- **Tailscale mode**: No warnings at all. Install Tailscale on both devices, enable HTTPS certs in the Tailscale admin panel, and restart Dictator.
+- **Tailscale mode**: No warnings at all. Enable Tailscale in Dictator's Settings, and install Tailscale on both devices.
 
 Full setup instructions are served at `/setup` on the companion server.
 
@@ -88,19 +91,19 @@ Full setup instructions are served at `/setup` on the companion server.
 
 ```
 apps/desktop/          Tauri desktop app (Rust backend + HTML frontend)
-  src/main.rs          App entry point, Tauri commands
+  src/main.rs          App entry point, Tauri commands, system tray
   src/server.rs        HTTPS server for phone companion
   src/transcription.rs Whisper integration
   src/tts.rs           Text-to-speech (SAPI + Piper neural voices)
   src/llm.rs           LLM text formatting via llama.cpp
   src/templates.rs     LLM format presets (clean up, professional, etc.)
-  src/model_manager.rs Whisper model discovery and download
+  src/model_manager.rs Whisper/LLM/Piper model discovery and download
   src/tailscale.rs     Tailscale detection and cert generation
   ui/index.html        Desktop UI
   companion/           Phone companion web app
     index.html         Mic capture + WebSocket client
     setup.html         HTTPS setup guide
-models/                Whisper model files (not committed)
+models/                Model files (downloaded on first run, not committed)
 ```
 
 ## License

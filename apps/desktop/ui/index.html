@@ -860,7 +860,7 @@
 
   <script>
     const { invoke } = window.__TAURI__.core;
-    const { listen } = window.__TAURI__.event;
+    const { listen, emit } = window.__TAURI__.event;
 
     // ── Theme Definitions ───────────────────────────────────────────────
     const THEMES = {
@@ -2079,6 +2079,8 @@
       // Sync to backend so tray and server stay in sync
       try { await invoke('set_auto_format', { enabled: autoFormatEnabled }); } catch (_) {}
       try { await invoke('set_auto_format_type', { formatType: autoFormatType.value }); } catch (_) {}
+      emit('sync-tray-autoformat', String(autoFormatEnabled));
+      emit('sync-tray-format', autoFormatType.value);
 
       if (autoFormatEnabled) {
         await ensureLlmModel();
@@ -2088,6 +2090,7 @@
     autoFormatType.addEventListener('change', async () => {
       localStorage.setItem('dictator-autoformat-type', autoFormatType.value);
       try { await invoke('set_auto_format_type', { formatType: autoFormatType.value }); } catch (_) {}
+      emit('sync-tray-format', autoFormatType.value);
     });
 
     const autostartToggle = document.getElementById('autostartToggle');
@@ -2280,8 +2283,12 @@
 
     async function loadAutostartState() {
       try {
-        const enabled = await invoke('get_autostart');
-        if (enabled) autostartToggle.classList.add('on');
+        const result = await invoke('get_autostart');
+        if (result.enabled) autostartToggle.classList.add('on');
+        if (result.stale) {
+          // Exe path changed (app was moved) — silently re-register with current path
+          try { await invoke('fix_autostart'); } catch (_) {}
+        }
       } catch (e) { /* ignore */ }
     }
 

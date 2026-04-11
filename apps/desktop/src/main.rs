@@ -447,7 +447,7 @@ fn set_selected_device(state: State<AppState>, device: Option<String>) {
 }
 
 #[tauri::command]
-fn get_autostart() -> bool {
+fn get_autostart() -> serde_json::Value {
     use std::os::windows::process::CommandExt;
     let output = std::process::Command::new("reg")
         .args([
@@ -458,7 +458,30 @@ fn get_autostart() -> bool {
         ])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output();
-    matches!(output, Ok(o) if o.status.success())
+
+    let ok_output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return serde_json::json!({"enabled": false, "stale": false}),
+    };
+
+    // Parse the stored path from reg output ("    Dictator    REG_SZ    C:\path\to\exe")
+    let stdout = String::from_utf8_lossy(&ok_output.stdout);
+    let stored_path = stdout
+        .lines()
+        .find(|l| l.contains("Dictator"))
+        .and_then(|l| l.split("REG_SZ").nth(1))
+        .map(|p| p.trim().to_string());
+
+    let current_exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()));
+
+    let stale = match (&stored_path, &current_exe) {
+        (Some(stored), Some(current)) => !stored.eq_ignore_ascii_case(current),
+        _ => false,
+    };
+
+    serde_json::json!({"enabled": true, "stale": stale})
 }
 
 #[tauri::command]
@@ -634,6 +657,12 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Re-register autostart with the current exe path (repairs stale entries).
+#[tauri::command]
+fn fix_autostart() -> Result<(), String> {
+    set_autostart(true)
 }
 
 // ── Version Check ───────────────────────────────────────────────────────
@@ -1235,6 +1264,7 @@ fn main() {
             set_injection_mode,
             get_autostart,
             set_autostart,
+            fix_autostart,
             get_hotkey,
             set_hotkey,
             get_inject_hotkey,
@@ -1462,14 +1492,20 @@ fn main() {
             // ── System tray — auto-format toggle, cancel recording, show/quit ───
             use tauri::menu::PredefinedMenuItem;
 
+            // Read current format type from state so tray checkmark matches saved preference
+            let current_fmt = auto_format_type.lock().unwrap().clone();
+            let fmt_label = |id: &str, display: &str| -> String {
+                if id == current_fmt { format!("  \u{2713} {display}") } else { format!("  {display}") }
+            };
+
             let autoformat_item = tauri::menu::MenuItem::with_id(
                 app, "autoformat", "Auto Format: Off", true, None::<&str>,
             )?;
-            let fmt_clean = tauri::menu::MenuItem::with_id(app, "fmt_clean_up", "  ✓ Clean Up", true, None::<&str>)?;
-            let fmt_email = tauri::menu::MenuItem::with_id(app, "fmt_email", "  Email", true, None::<&str>)?;
-            let fmt_notes = tauri::menu::MenuItem::with_id(app, "fmt_meeting_notes", "  Meeting Notes", true, None::<&str>)?;
-            let fmt_docs = tauri::menu::MenuItem::with_id(app, "fmt_documentation", "  Documentation", true, None::<&str>)?;
-            let fmt_msg = tauri::menu::MenuItem::with_id(app, "fmt_message", "  Message", true, None::<&str>)?;
+            let fmt_clean = tauri::menu::MenuItem::with_id(app, "fmt_clean_up", &fmt_label("clean_up", "Clean Up"), true, None::<&str>)?;
+            let fmt_email = tauri::menu::MenuItem::with_id(app, "fmt_email", &fmt_label("email", "Email"), true, None::<&str>)?;
+            let fmt_notes = tauri::menu::MenuItem::with_id(app, "fmt_meeting_notes", &fmt_label("meeting_notes", "Meeting Notes"), true, None::<&str>)?;
+            let fmt_docs = tauri::menu::MenuItem::with_id(app, "fmt_documentation", &fmt_label("documentation", "Documentation"), true, None::<&str>)?;
+            let fmt_msg = tauri::menu::MenuItem::with_id(app, "fmt_message", &fmt_label("message", "Message"), true, None::<&str>)?;
 
             let sep1 = PredefinedMenuItem::separator(app)?;
             let cancel_rec_item = tauri::menu::MenuItem::with_id(
@@ -1489,7 +1525,15 @@ fn main() {
                 &quit_item,
             ])?;
 
+            // Clones for the various closures that need menu item access
             let autoformat_item2 = autoformat_item.clone();
+            let autoformat_item3 = autoformat_item.clone();
+            let fmt_clean2 = fmt_clean.clone();
+            let fmt_email2 = fmt_email.clone();
+            let fmt_notes2 = fmt_notes.clone();
+            let fmt_docs2 = fmt_docs.clone();
+            let fmt_msg2 = fmt_msg.clone();
+
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("Missing app icon").clone())
                 .tooltip("Dictator")
@@ -1615,6 +1659,31 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // Sync tray checkmarks when Settings changes the format type
+            {
+                use tauri::Listener;
+                app.listen("sync-tray-format", move |event| {
+                    let fmt_type = event.payload().trim_matches('"');
+                    let items: [(&tauri::menu::MenuItem<tauri::Wry>, &str, &str); 5] = [
+                        (&fmt_clean2, "clean_up", "Clean Up"),
+                        (&fmt_email2, "email", "Email"),
+                        (&fmt_notes2, "meeting_notes", "Meeting Notes"),
+                        (&fmt_docs2, "documentation", "Documentation"),
+                        (&fmt_msg2, "message", "Message"),
+                    ];
+                    for (item, id, display) in &items {
+                        let prefix = if *id == fmt_type { "  \u{2713} " } else { "  " };
+                        let _ = item.set_text(&format!("{prefix}{display}"));
+                    }
+                });
+
+                app.listen("sync-tray-autoformat", move |event| {
+                    let enabled = event.payload().trim_matches('"') == "true";
+                    let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
+                    let _ = autoformat_item3.set_text(label);
+                });
+            }
 
             // Hide to tray when the X button is clicked (instead of quitting)
             let window = app.get_webview_window("main").unwrap();
