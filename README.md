@@ -15,7 +15,7 @@ Open the URL shown in the app on your phone's browser, tap the mic button and sp
 ## Features
 
 - **Local speech-to-text** via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — no internet required, multiple model sizes (tiny to large)
-- **AI text formatting** — optional local LLM (llama.cpp) cleans up, rephrases, or reformats your dictation before insertion. Multiple presets: clean up, professional, casual, bullet points, and more. Downloads a ~2 GB model on first use.
+- **AI text formatting** — optional local LLM cleans up your dictation before insertion. Dictated speech is messy (filler words, run-on sentences, no punctuation). When enabled, a local language model running via [llama.cpp](https://github.com/ggerganov/llama.cpp) reformats the text before it's typed. Presets: Clean up, Email, Meeting notes, Documentation, Message. Downloads a ~2 GB model on first use. You can also drop your own GGUF models into the `models/` folder — the app auto-detects them.
 - **Neural text-to-speech** — highlight text anywhere and hear it read aloud using [Piper](https://github.com/rhasspy/piper) neural voices or Windows SAPI. Pause/resume with the same hotkey. 10+ downloadable voice models.
 - **Configurable hotkeys** — record, inject text, and read-aloud each have their own global hotkey. Works from any app without switching windows.
 - **AI formatting from the system tray** — left-click the tray icon to toggle auto-format, right-click to pick a format preset (clean up, email, meeting notes, documentation, message)
@@ -105,6 +105,28 @@ apps/desktop/          Tauri desktop app (Rust backend + HTML frontend)
     setup.html         HTTPS setup guide
 models/                Model files (downloaded on first run, not committed)
 ```
+
+## AI Models
+
+Dictator uses two types of local AI models (no cloud, no API keys):
+
+| Model | Purpose | Default | Size |
+|-------|---------|---------|------|
+| Whisper (whisper.cpp) | Speech-to-text | ggml-base.en.bin | ~142 MB |
+| LLM (llama.cpp) | Text formatting | Phi-3 Mini Q4_K_M | ~2.4 GB |
+
+The LLM is **optional** — it only downloads when you enable auto-format. Without it, raw transcription is inserted directly.
+
+### Using your own models
+
+- **Whisper:** Place any ggml Whisper `.bin` file in the `models/` folder. The app picks the first one it finds.
+- **LLM:** Place any GGUF file in the `models/` folder. The app auto-detects Phi-3 and Llama 3 chat formats from the filename; other models use Llama 3 format by default. Q4_K_M quantizations work best.
+
+## Uninstall
+
+Open **Settings** > scroll to bottom > click **Remove all app data**. This deletes all models, certificates, settings, and the autostart registry entry.
+
+After cleanup, close the app and delete the app folder. See [docs/uninstall.md](docs/uninstall.md) for manual cleanup steps.
 
 ## License
 
