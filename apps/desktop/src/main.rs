@@ -9,6 +9,7 @@ use dictator::tailscale;
 use dictator::templates::FormatType;
 use dictator::transcription;
 use dictator::tts;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -66,6 +67,8 @@ struct AppState {
     server_shared: Mutex<Option<ServerShared>>,
     /// When the Tailscale cert was last generated (epoch secs), for expiry tracking
     tailscale_cert_generated: Mutex<Option<u64>>,
+    /// Custom template instructions (overrides defaults in templates.rs)
+    custom_templates: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Shared references needed to construct a ServerState for the dynamic Tailscale server.
@@ -1086,6 +1089,36 @@ fn list_formats() -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Get the instruction text for a format type (custom override or default).
+#[tauri::command]
+fn get_template(state: State<AppState>, format_type: String) -> serde_json::Value {
+    let ft: FormatType = serde_json::from_value(serde_json::Value::String(format_type.clone()))
+        .unwrap_or(FormatType::None);
+    let customs = state.custom_templates.lock().unwrap();
+    let custom = customs.get(&format_type);
+    serde_json::json!({
+        "instruction": custom.cloned().unwrap_or_else(|| ft.default_instruction().to_string()),
+        "is_custom": custom.is_some(),
+        "default": ft.default_instruction(),
+    })
+}
+
+/// Save a custom instruction for a format type.
+#[tauri::command]
+fn set_template(state: State<AppState>, format_type: String, instruction: String) {
+    let mut customs = state.custom_templates.lock().unwrap();
+    customs.insert(format_type, instruction);
+    dictator::templates::save_custom_templates(&customs);
+}
+
+/// Reset a format type back to its default instruction.
+#[tauri::command]
+fn reset_template(state: State<AppState>, format_type: String) {
+    let mut customs = state.custom_templates.lock().unwrap();
+    customs.remove(&format_type);
+    dictator::templates::save_custom_templates(&customs);
+}
+
 #[tauri::command]
 fn get_llm_status(state: State<AppState>) -> serde_json::Value {
     let status = *state.llm_status.lock().unwrap();
@@ -1136,8 +1169,13 @@ fn format_text(
     let guard = state.formatter.lock().unwrap();
     let formatter = guard.as_ref().ok_or("LLM not loaded")?;
 
+    // Check for a custom template override
+    let customs = state.custom_templates.lock().unwrap();
+    let custom_instruction = customs.get(format_type.key()).cloned();
+    drop(customs);
+
     formatter
-        .format_text(&text, format_type)
+        .format_text_custom(&text, format_type, custom_instruction.as_deref())
         .map_err(|e| format!("{e}"))
 }
 
@@ -1236,6 +1274,9 @@ fn main() {
             tailscale_server_running: Arc::new(AtomicBool::new(false)),
             server_shared: Mutex::new(None),
             tailscale_cert_generated: Mutex::new(None),
+            custom_templates: Arc::new(Mutex::new(
+                dictator::templates::load_custom_templates(),
+            )),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -1287,6 +1328,9 @@ fn main() {
             download_piper_voice,
             delete_piper_voice,
             list_formats,
+            get_template,
+            set_template,
+            reset_template,
             get_llm_status,
             format_text,
             has_llm_model,

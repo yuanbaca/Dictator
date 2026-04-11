@@ -50,13 +50,27 @@ impl Formatter {
     }
 
     /// Format raw dictated text using the given format type.
-    /// Returns the formatted text.
-    pub fn format_text(&self, raw_text: &str, format: FormatType) -> Result<String, LlmError> {
+    /// If `custom_instruction` is provided, it overrides the default template.
+    pub fn format_text(
+        &self,
+        raw_text: &str,
+        format: FormatType,
+    ) -> Result<String, LlmError> {
+        self.format_text_custom(raw_text, format, None)
+    }
+
+    /// Format with an optional custom instruction override.
+    pub fn format_text_custom(
+        &self,
+        raw_text: &str,
+        format: FormatType,
+        custom_instruction: Option<&str>,
+    ) -> Result<String, LlmError> {
         if format == FormatType::None {
             return Ok(raw_text.to_string());
         }
 
-        let prompt = format.build_prompt(raw_text, self.chat_format);
+        let prompt = format.build_prompt_custom(raw_text, self.chat_format, custom_instruction);
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZero::new(2048));

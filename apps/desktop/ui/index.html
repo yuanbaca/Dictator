@@ -826,6 +826,36 @@
           </select>
         </div>
 
+        <div id="templateEditorGroup" style="display:none; margin-bottom:12px;">
+          <details id="templateEditorDetails">
+            <summary style="font-size:12px; color:var(--text-muted); cursor:pointer; user-select:none; padding:4px 0;">
+              Edit format prompts
+            </summary>
+            <div style="margin-top:8px;">
+              <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">
+                Editing prompt for: <strong id="templateEditingLabel">Clean up</strong>
+                <span id="templateCustomBadge" style="display:none; font-size:10px; color:var(--warning); margin-left:6px;">customized</span>
+              </div>
+              <textarea id="templateTextarea" rows="5" style="
+                width:100%; font-size:12px; font-family:inherit; color:var(--text);
+                background:var(--bg); border:1px solid var(--border); border-radius:6px;
+                padding:8px; resize:vertical; line-height:1.4;
+              "></textarea>
+              <div style="display:flex; gap:6px; margin-top:6px;">
+                <button id="templateSaveBtn" style="
+                  flex:1; padding:5px 0; font-size:12px; border:none; border-radius:4px;
+                  background:var(--accent); color:#000; cursor:pointer;
+                ">Save</button>
+                <button id="templateResetBtn" style="
+                  flex:1; padding:5px 0; font-size:12px; border:none; border-radius:4px;
+                  background:var(--border); color:var(--text); cursor:pointer;
+                ">Reset to Default</button>
+              </div>
+              <div id="templateStatus" style="font-size:11px; color:var(--accent); margin-top:4px; min-height:14px;"></div>
+            </div>
+          </details>
+        </div>
+
         <div class="setting-group">
           <label>Insertion mode</label>
           <select id="injectionMode">
@@ -1887,8 +1917,35 @@
       }
     });
 
+    function confirmPiperDownload() {
+      return new Promise((resolve) => {
+        piperSetupArea.style.display = '';
+        piperSetupLabel.textContent = 'Piper requires a one-time download (~20 MB engine + voice model).';
+        piperProgressFill.style.width = '0%';
+        piperProgressStatus.innerHTML =
+          '<button id="piperConfirmYes" style="background:var(--accent); color:#000; border:none; border-radius:4px; padding:4px 14px; cursor:pointer; font-size:12px; margin-right:8px;">Download</button>' +
+          '<button id="piperConfirmNo" style="background:var(--border); color:var(--text); border:none; border-radius:4px; padding:4px 14px; cursor:pointer; font-size:12px;">Cancel</button>';
+        document.getElementById('piperConfirmYes').onclick = () => resolve(true);
+        document.getElementById('piperConfirmNo').onclick = () => resolve(false);
+      });
+    }
+
     ttsEngineSelect.addEventListener('change', async () => {
       const engine = ttsEngineSelect.value;
+
+      if (engine === 'piper') {
+        const hasPiper = await invoke('has_piper');
+        if (!hasPiper) {
+          const ok = await confirmPiperDownload();
+          if (!ok) {
+            ttsEngineSelect.value = localStorage.getItem('dictator-tts-engine') || 'sapi';
+            piperSetupArea.style.display = 'none';
+            updateTtsUI();
+            return;
+          }
+        }
+      }
+
       localStorage.setItem('dictator-tts-engine', engine);
       await invoke('set_tts_engine', { engine });
       updateTtsUI();
@@ -2025,6 +2082,9 @@
     function updateAutoFormatUI() {
       autoFormatHint.style.display = autoFormatEnabled ? '' : 'none';
       autoFormatTypeGroup.style.display = autoFormatEnabled ? '' : 'none';
+      if (typeof templateEditorGroup !== 'undefined') {
+        templateEditorGroup.style.display = autoFormatEnabled ? '' : 'none';
+      }
     }
 
     async function ensureLlmModel() {
@@ -2070,6 +2130,7 @@
     const savedAutoFormatType = localStorage.getItem('dictator-autoformat-type');
     if (savedAutoFormatType) autoFormatType.value = savedAutoFormatType;
     updateAutoFormatUI();
+    loadTemplateForEditor();
 
     autoFormatToggle.addEventListener('click', async () => {
       autoFormatEnabled = autoFormatToggle.classList.toggle('on');
@@ -2091,6 +2152,71 @@
       localStorage.setItem('dictator-autoformat-type', autoFormatType.value);
       try { await invoke('set_auto_format_type', { formatType: autoFormatType.value }); } catch (_) {}
       emit('sync-tray-format', autoFormatType.value);
+      loadTemplateForEditor();
+    });
+
+    // ── Template editor ─────────────────────────────────────────────────
+    const templateEditorGroup = document.getElementById('templateEditorGroup');
+    const templateTextarea = document.getElementById('templateTextarea');
+    const templateEditingLabel = document.getElementById('templateEditingLabel');
+    const templateCustomBadge = document.getElementById('templateCustomBadge');
+    const templateSaveBtn = document.getElementById('templateSaveBtn');
+    const templateResetBtn = document.getElementById('templateResetBtn');
+    const templateStatus = document.getElementById('templateStatus');
+
+    function updateAutoFormatUIFull() {
+      updateAutoFormatUI();
+      templateEditorGroup.style.display = autoFormatEnabled ? '' : 'none';
+    }
+
+    async function loadTemplateForEditor() {
+      const fmt = autoFormatType.value;
+      const labels = { clean_up:'Clean up', email:'Email', meeting_notes:'Meeting notes', documentation:'Documentation', message:'Message' };
+      templateEditingLabel.textContent = labels[fmt] || fmt;
+      try {
+        const t = await invoke('get_template', { formatType: fmt });
+        templateTextarea.value = t.instruction;
+        templateCustomBadge.style.display = t.is_custom ? '' : 'none';
+      } catch (_) {
+        templateTextarea.value = '';
+      }
+      templateStatus.textContent = '';
+    }
+
+    templateSaveBtn.addEventListener('click', async () => {
+      const fmt = autoFormatType.value;
+      const instruction = templateTextarea.value.trim();
+      if (!instruction) {
+        templateStatus.style.color = 'var(--danger)';
+        templateStatus.textContent = 'Prompt cannot be empty';
+        return;
+      }
+      try {
+        await invoke('set_template', { formatType: fmt, instruction });
+        templateCustomBadge.style.display = '';
+        templateStatus.style.color = 'var(--accent)';
+        templateStatus.textContent = 'Saved!';
+        setTimeout(() => { templateStatus.textContent = ''; }, 2000);
+      } catch (e) {
+        templateStatus.style.color = 'var(--danger)';
+        templateStatus.textContent = 'Save failed: ' + e;
+      }
+    });
+
+    templateResetBtn.addEventListener('click', async () => {
+      const fmt = autoFormatType.value;
+      try {
+        await invoke('reset_template', { formatType: fmt });
+        const t = await invoke('get_template', { formatType: fmt });
+        templateTextarea.value = t.instruction;
+        templateCustomBadge.style.display = 'none';
+        templateStatus.style.color = 'var(--accent)';
+        templateStatus.textContent = 'Reset to default';
+        setTimeout(() => { templateStatus.textContent = ''; }, 2000);
+      } catch (e) {
+        templateStatus.style.color = 'var(--danger)';
+        templateStatus.textContent = 'Reset failed: ' + e;
+      }
     });
 
     const autostartToggle = document.getElementById('autostartToggle');

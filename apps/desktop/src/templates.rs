@@ -56,7 +56,8 @@ impl FormatType {
         }
     }
 
-    fn instruction(&self) -> &'static str {
+    /// Returns the default instruction for this format type.
+    pub fn default_instruction(&self) -> &'static str {
         match self {
             FormatType::None => "",
             FormatType::CleanUp => {
@@ -95,12 +96,23 @@ impl FormatType {
     }
 
     /// Build the full prompt using the appropriate chat template format.
+    /// If `custom_instruction` is provided, it overrides the default.
     pub fn build_prompt(&self, raw_text: &str, format: ChatFormat) -> String {
+        self.build_prompt_custom(raw_text, format, None)
+    }
+
+    /// Build prompt with an optional custom instruction override.
+    pub fn build_prompt_custom(
+        &self,
+        raw_text: &str,
+        format: ChatFormat,
+        custom_instruction: Option<&str>,
+    ) -> String {
         if *self == FormatType::None {
             return raw_text.to_string();
         }
 
-        let instruction = self.instruction();
+        let instruction = custom_instruction.unwrap_or_else(|| self.default_instruction());
 
         match format {
             ChatFormat::Phi3 => {
@@ -121,5 +133,42 @@ impl FormatType {
                 )
             }
         }
+    }
+
+    /// Convert to the snake_case key used for storage (matches serde serialization).
+    pub fn key(&self) -> &'static str {
+        match self {
+            FormatType::None => "none",
+            FormatType::CleanUp => "clean_up",
+            FormatType::Email => "email",
+            FormatType::MeetingNotes => "meeting_notes",
+            FormatType::Documentation => "documentation",
+            FormatType::Message => "message",
+        }
+    }
+}
+
+// ── Custom template persistence ────────────────────────────────────────
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+fn custom_templates_path() -> PathBuf {
+    crate::model_manager::models_dir().join("custom_templates.json")
+}
+
+pub fn load_custom_templates() -> HashMap<String, String> {
+    let path = custom_templates_path();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        HashMap::new()
+    }
+}
+
+pub fn save_custom_templates(templates: &HashMap<String, String>) {
+    let path = custom_templates_path();
+    if let Ok(json) = serde_json::to_string_pretty(templates) {
+        let _ = std::fs::write(&path, json);
     }
 }
