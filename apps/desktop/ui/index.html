@@ -814,6 +814,10 @@
           <label>Sound effects</label>
           <div class="toggle" id="soundToggle"></div>
         </div>
+        <div class="setting-row" id="progressBeepRow" style="display:none; padding-left:18px;">
+          <label style="font-size:12px; color:var(--text-muted);">Progress beeps</label>
+          <div class="toggle" id="progressBeepToggle"></div>
+        </div>
 
         <div class="setting-row">
           <label id="autoFormatLabel">Auto-format with AI</label>
@@ -1143,6 +1147,7 @@
         progressFill.style.width = '0%';
         setStatus('ready', 'Ready — click the mic to record');
         micHint.textContent = 'Recording cancelled';
+        stopProgressBeeps();
         soundError();
         setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
         updateEscapeShortcut();
@@ -1288,6 +1293,32 @@
       playTone(554, now + 0.08, 0.1, 0.1); // C#5
       playTone(659, now + 0.16, 0.1, 0.1); // E5
       playTone(880, now + 0.24, 0.15, 0.08); // A5 shimmer
+    }
+
+    // ── Progress beeps (periodic chime during processing) ──────────────
+    let progressBeepEnabled = localStorage.getItem('dictator-progress-beep') === 'true';
+    let progressBeepInterval = null;
+
+    function playProgressBeep() {
+      if (!soundEnabled || !progressBeepEnabled) return;
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      playTone(880, now, 0.08, 0.04);        // soft high ping
+      playTone(1100, now + 0.06, 0.06, 0.03); // gentle overtone
+    }
+
+    function startProgressBeeps() {
+      stopProgressBeeps();
+      if (!soundEnabled || !progressBeepEnabled) return;
+      playProgressBeep();
+      progressBeepInterval = setInterval(playProgressBeep, 2500);
+    }
+
+    function stopProgressBeeps() {
+      if (progressBeepInterval) {
+        clearInterval(progressBeepInterval);
+        progressBeepInterval = null;
+      }
     }
 
     // ── Startup ─────────────────────────────────────────────────────────
@@ -1492,6 +1523,7 @@
         setStatus('transcribing', 'Transcribing...');
         stopRecTimer();
         soundRecordStop();
+        startProgressBeeps();
         const recDurationSec = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 3;
         startAnimatedProgress(recDurationSec);
 
@@ -1519,6 +1551,7 @@
           }
 
           completeProgress();
+          stopProgressBeeps();
           soundComplete();
 
           currentText = text;
@@ -1543,6 +1576,7 @@
           }
         } catch (e) {
           resetProgress();
+          stopProgressBeeps();
           soundError();
           const err = '' + e;
           micHint.textContent = 'Click to start recording';
@@ -1616,12 +1650,14 @@
       formatBtn.classList.add('loading');
       formatBtn.textContent = 'Formatting...';
       micHint.textContent = 'AI is formatting your text...';
+      startProgressBeeps();
 
       try {
         const formatted = await invoke('format_text', {
           text: rawText,
           format: formatSelect.value,
         });
+        stopProgressBeeps();
         currentText = formatted;
         transcript.textContent = formatted;
         transcript.classList.remove('empty');
@@ -1629,6 +1665,7 @@
         micHint.textContent = 'Formatted! Click Insert or pick another format';
         soundComplete();
       } catch (e) {
+        stopProgressBeeps();
         showError('Formatting failed: ' + e);
         micHint.textContent = 'Format failed — you can still insert raw text';
         soundError();
@@ -2179,10 +2216,23 @@
     listen('cancel-recording', () => handleEscapeAction());
 
     const soundToggle = document.getElementById('soundToggle');
-    if (soundEnabled) soundToggle.classList.add('on');
+    const progressBeepRow = document.getElementById('progressBeepRow');
+    const progressBeepToggle = document.getElementById('progressBeepToggle');
+    if (soundEnabled) {
+      soundToggle.classList.add('on');
+      progressBeepRow.style.display = '';
+    }
+    if (progressBeepEnabled) progressBeepToggle.classList.add('on');
+
     soundToggle.addEventListener('click', () => {
       soundEnabled = soundToggle.classList.toggle('on');
       localStorage.setItem('dictator-sound', soundEnabled);
+      progressBeepRow.style.display = soundEnabled ? '' : 'none';
+    });
+
+    progressBeepToggle.addEventListener('click', () => {
+      progressBeepEnabled = progressBeepToggle.classList.toggle('on');
+      localStorage.setItem('dictator-progress-beep', progressBeepEnabled);
     });
 
     // ── Auto-format toggle ──────────────────────────────────────────────
