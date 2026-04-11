@@ -677,26 +677,27 @@ fn get_app_version() -> String {
     APP_VERSION.to_string()
 }
 
+/// Version check endpoint. Currently uses a public Gist (works while repo is private).
+/// When the repo goes public, switch to GitHub Releases API:
+///   https://api.github.com/repos/yuanbaca/Dictator/releases/latest
+const VERSION_CHECK_URL: &str =
+    "https://gist.githubusercontent.com/yuanbaca/0a44d0642f6e774ab3776bda7fd870a1/raw/version.json";
+
 #[tauri::command]
 async fn check_for_updates() -> serde_json::Value {
     let current = APP_VERSION;
-    // Check GitHub releases API (replace with actual repo when published)
-    let result = reqwest::get(
-        "https://api.github.com/repos/yuanbaca/dictator/releases/latest",
-    )
-    .await;
+
+    let result = reqwest::Client::new()
+        .get(VERSION_CHECK_URL)
+        .header("Cache-Control", "no-cache")
+        .send()
+        .await;
 
     match result {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
-                let json: serde_json::Value = json;
-                let latest = json["tag_name"]
-                    .as_str()
-                    .unwrap_or("")
-                    .trim_start_matches('v');
-                let url = json["html_url"]
-                    .as_str()
-                    .unwrap_or("");
+                let latest = json["version"].as_str().unwrap_or("");
+                let url = json["url"].as_str().unwrap_or("");
                 return serde_json::json!({
                     "current": current,
                     "latest": latest,
