@@ -2130,7 +2130,6 @@
     const savedAutoFormatType = localStorage.getItem('dictator-autoformat-type');
     if (savedAutoFormatType) autoFormatType.value = savedAutoFormatType;
     updateAutoFormatUI();
-    loadTemplateForEditor();
 
     autoFormatToggle.addEventListener('click', async () => {
       autoFormatEnabled = autoFormatToggle.classList.toggle('on');
@@ -2218,6 +2217,9 @@
         templateStatus.textContent = 'Reset failed: ' + e;
       }
     });
+
+    // Load template content now that all editor elements are defined
+    loadTemplateForEditor();
 
     const autostartToggle = document.getElementById('autostartToggle');
     autostartToggle.addEventListener('click', async () => {
