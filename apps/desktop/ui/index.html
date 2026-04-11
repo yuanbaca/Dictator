@@ -2082,9 +2082,9 @@
     function updateAutoFormatUI() {
       autoFormatHint.style.display = autoFormatEnabled ? '' : 'none';
       autoFormatTypeGroup.style.display = autoFormatEnabled ? '' : 'none';
-      if (typeof templateEditorGroup !== 'undefined') {
-        templateEditorGroup.style.display = autoFormatEnabled ? '' : 'none';
-      }
+      // Use getElementById to avoid temporal dead zone (const declared later)
+      const teg = document.getElementById('templateEditorGroup');
+      if (teg) teg.style.display = autoFormatEnabled ? '' : 'none';
     }
 
     async function ensureLlmModel() {
