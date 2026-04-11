@@ -721,7 +721,12 @@
             <option value="F9">F9</option>
             <option value="Ctrl+F9">Ctrl + F9</option>
             <option value="none">Disabled</option>
+            <option value="custom">Custom...</option>
           </select>
+          <div id="hotkeyCustomRow" style="display:none; margin-top:6px;">
+            <input id="hotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+          </div>
         </div>
 
         <div class="setting-group">
@@ -732,7 +737,12 @@
             <option value="Ctrl+Shift+I">Ctrl + Shift + I</option>
             <option value="F10">F10</option>
             <option value="Ctrl+F10">Ctrl + F10</option>
+            <option value="custom">Custom...</option>
           </select>
+          <div id="injectHotkeyCustomRow" style="display:none; margin-top:6px;">
+            <input id="injectHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+          </div>
         </div>
 
         <div class="setting-group">
@@ -742,7 +752,12 @@
             <option value="Ctrl+Shift+R">Ctrl + Shift + R</option>
             <option value="Ctrl+Shift+T">Ctrl + Shift + T</option>
             <option value="F11">F11</option>
+            <option value="custom">Custom...</option>
           </select>
+          <div id="ttsHotkeyCustomRow" style="display:none; margin-top:6px;">
+            <input id="ttsHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+          </div>
         </div>
         <div id="ttsHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
           Highlight text anywhere, press hotkey to hear it read aloud
@@ -884,11 +899,7 @@
           </details>
         </div>
 
-        <div class="setting-row">
-          <label>Check for updates</label>
-          <div class="toggle" id="updateCheckToggle"></div>
-        </div>
-        <div id="versionInfo" style="font-size:11px; color:var(--text-muted); margin:-10px 0 4px; text-align:right;"></div>
+        <div id="versionInfo" style="font-size:11px; color:var(--text-muted); margin:4px 0; text-align:right;"></div>
       </div>
     </div>
   </div>
@@ -1730,25 +1741,84 @@
       await invoke('set_auto_space', { enabled: isOn });
     });
 
+    // ── Custom hotkey capture helper ────────────────────────────────────
+    function captureKeyCombo(inputEl, callback) {
+      inputEl.value = '';
+      inputEl.placeholder = 'Press a key combo...';
+      inputEl.style.borderColor = 'var(--accent)';
+      const handler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Ignore bare modifier presses — wait for the actual key
+        if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+        const parts = [];
+        if (e.ctrlKey) parts.push('Ctrl');
+        if (e.altKey) parts.push('Alt');
+        if (e.shiftKey) parts.push('Shift');
+        if (e.metaKey) parts.push('Super');
+        // Normalize key name
+        let key = e.key;
+        if (key === ' ') key = 'Space';
+        else if (key.length === 1) key = key.toUpperCase();
+        parts.push(key);
+        const combo = parts.join('+');
+        inputEl.value = combo;
+        inputEl.style.borderColor = '';
+        inputEl.removeEventListener('keydown', handler);
+        callback(combo);
+      };
+      inputEl.addEventListener('keydown', handler);
+      inputEl.focus();
+    }
+
+    function setupHotkeySelect(selectEl, customRowId, customInputId, storageKey, invokeCmd) {
+      const customRow = document.getElementById(customRowId);
+      const customInput = document.getElementById(customInputId);
+
+      selectEl.addEventListener('change', async () => {
+        if (selectEl.value === 'custom') {
+          customRow.style.display = '';
+          captureKeyCombo(customInput, async (combo) => {
+            try {
+              await invoke(invokeCmd, { preset: combo });
+              localStorage.setItem(storageKey, combo);
+            } catch (e) {
+              showError('Hotkey failed: ' + e);
+              // Revert to previous
+              const prev = localStorage.getItem(storageKey) || 'none';
+              selectEl.value = prev;
+              customRow.style.display = 'none';
+            }
+          });
+        } else {
+          customRow.style.display = 'none';
+          try {
+            await invoke(invokeCmd, { preset: selectEl.value });
+            localStorage.setItem(storageKey, selectEl.value);
+          } catch (e) {
+            showError('Hotkey failed: ' + e);
+          }
+        }
+      });
+
+      // Re-capture on click if already in custom mode
+      customInput.addEventListener('click', () => {
+        captureKeyCombo(customInput, async (combo) => {
+          try {
+            await invoke(invokeCmd, { preset: combo });
+            localStorage.setItem(storageKey, combo);
+          } catch (e) {
+            showError('Hotkey failed: ' + e);
+          }
+        });
+      });
+    }
+
     const hotkeySelect = document.getElementById('hotkeySelect');
-    hotkeySelect.addEventListener('change', async () => {
-      try {
-        await invoke('set_hotkey', { preset: hotkeySelect.value });
-        localStorage.setItem('dictator-hotkey', hotkeySelect.value);
-      } catch (e) {
-        showError('Hotkey failed: ' + e);
-      }
-    });
+    setupHotkeySelect(hotkeySelect, 'hotkeyCustomRow', 'hotkeyCustomInput', 'dictator-hotkey', 'set_hotkey');
 
     const injectHotkeySelect = document.getElementById('injectHotkeySelect');
-    injectHotkeySelect.addEventListener('change', async () => {
-      try {
-        await invoke('set_inject_hotkey', { preset: injectHotkeySelect.value });
-        localStorage.setItem('dictator-inject-hotkey', injectHotkeySelect.value);
-      } catch (e) {
-        showError('Inject hotkey failed: ' + e);
-      }
-    });
+    setupHotkeySelect(injectHotkeySelect, 'injectHotkeyCustomRow', 'injectHotkeyCustomInput', 'dictator-inject-hotkey', 'set_inject_hotkey');
 
     // Listen for inject-at-cursor hotkey event
     listen('inject-at-cursor', () => { doInject(); });
@@ -1920,15 +1990,50 @@
       piperProgressStatus.textContent = mb + ' / ' + totalMb + ' MB (' + percent + '%)';
     });
 
-    ttsHotkeySelect.addEventListener('change', async () => {
-      try {
-        await invoke('set_tts_hotkey', { preset: ttsHotkeySelect.value });
-        localStorage.setItem('dictator-tts-hotkey', ttsHotkeySelect.value);
-        updateTtsUI();
-      } catch (e) {
-        showError('Read aloud hotkey failed: ' + e);
-      }
-    });
+    // TTS hotkey uses the shared helper but also needs to call updateTtsUI
+    {
+      const ttsCustomRow = document.getElementById('ttsHotkeyCustomRow');
+      const ttsCustomInput = document.getElementById('ttsHotkeyCustomInput');
+
+      ttsHotkeySelect.addEventListener('change', async () => {
+        if (ttsHotkeySelect.value === 'custom') {
+          ttsCustomRow.style.display = '';
+          captureKeyCombo(ttsCustomInput, async (combo) => {
+            try {
+              await invoke('set_tts_hotkey', { preset: combo });
+              localStorage.setItem('dictator-tts-hotkey', combo);
+              updateTtsUI();
+            } catch (e) {
+              showError('Read aloud hotkey failed: ' + e);
+              const prev = localStorage.getItem('dictator-tts-hotkey') || 'none';
+              ttsHotkeySelect.value = prev;
+              ttsCustomRow.style.display = 'none';
+            }
+          });
+        } else {
+          ttsCustomRow.style.display = 'none';
+          try {
+            await invoke('set_tts_hotkey', { preset: ttsHotkeySelect.value });
+            localStorage.setItem('dictator-tts-hotkey', ttsHotkeySelect.value);
+            updateTtsUI();
+          } catch (e) {
+            showError('Read aloud hotkey failed: ' + e);
+          }
+        }
+      });
+
+      ttsCustomInput.addEventListener('click', () => {
+        captureKeyCombo(ttsCustomInput, async (combo) => {
+          try {
+            await invoke('set_tts_hotkey', { preset: combo });
+            localStorage.setItem('dictator-tts-hotkey', combo);
+            updateTtsUI();
+          } catch (e) {
+            showError('Read aloud hotkey failed: ' + e);
+          }
+        });
+      });
+    }
 
     function confirmPiperDownload() {
       return new Promise((resolve) => {
@@ -2354,21 +2459,8 @@
 
     setInterval(pollPhoneStatus, 2000);
 
-    // ── Version check toggle ───────────────────────────────────────────
-    const updateCheckToggle = document.getElementById('updateCheckToggle');
+    // ── Version check (runs once per boot) ──────────────────────────────
     const versionInfo = document.getElementById('versionInfo');
-    let updateCheckEnabled = localStorage.getItem('dictator-updatecheck') === 'true';
-    if (updateCheckEnabled) updateCheckToggle.classList.add('on');
-
-    updateCheckToggle.addEventListener('click', () => {
-      updateCheckEnabled = updateCheckToggle.classList.toggle('on');
-      localStorage.setItem('dictator-updatecheck', updateCheckEnabled);
-      if (updateCheckEnabled) {
-        checkForUpdates();
-      } else {
-        versionInfo.textContent = '';
-      }
-    });
 
     async function checkForUpdates() {
       try {
@@ -2390,15 +2482,33 @@
     }
 
     // ── Init ────────────────────────────────────────────────────────────
+    // Helper: restore a hotkey select, showing custom row if needed
+    function restoreHotkeySelect(selectEl, customRowId, customInputId, saved) {
+      const customRow = document.getElementById(customRowId);
+      const customInput = document.getElementById(customInputId);
+      // Check if saved value matches a preset option
+      const presets = Array.from(selectEl.options).map(o => o.value).filter(v => v !== 'custom');
+      if (saved && saved !== 'none' && saved !== 'custom' && !presets.includes(saved)) {
+        // It's a custom combo — select "custom" and show the input
+        selectEl.value = 'custom';
+        customRow.style.display = '';
+        customInput.value = saved;
+      } else {
+        selectEl.value = saved || 'none';
+        customRow.style.display = 'none';
+        customInput.value = '';
+      }
+    }
+
     async function loadHotkey() {
       const saved = localStorage.getItem('dictator-hotkey') || 'Ctrl+Shift+Space';
-      hotkeySelect.value = saved;
+      restoreHotkeySelect(hotkeySelect, 'hotkeyCustomRow', 'hotkeyCustomInput', saved);
       try {
         await invoke('set_hotkey', { preset: saved });
       } catch (e) { /* ignore */ }
 
       const savedInject = localStorage.getItem('dictator-inject-hotkey') || 'none';
-      injectHotkeySelect.value = savedInject;
+      restoreHotkeySelect(injectHotkeySelect, 'injectHotkeyCustomRow', 'injectHotkeyCustomInput', savedInject);
       if (savedInject !== 'none') {
         try {
           await invoke('set_inject_hotkey', { preset: savedInject });
@@ -2406,7 +2516,7 @@
       }
 
       const savedTts = localStorage.getItem('dictator-tts-hotkey') || 'none';
-      ttsHotkeySelect.value = savedTts;
+      restoreHotkeySelect(ttsHotkeySelect, 'ttsHotkeyCustomRow', 'ttsHotkeyCustomInput', savedTts);
       if (savedTts !== 'none') {
         try {
           await invoke('set_tts_hotkey', { preset: savedTts });
@@ -2539,7 +2649,7 @@
     loadAudioDevices();
     loadAutostartState();
     loadHotkey();
-    if (updateCheckEnabled) checkForUpdates();
+    checkForUpdates();
   </script>
 </body>
 </html>
