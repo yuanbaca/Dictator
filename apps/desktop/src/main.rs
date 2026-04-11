@@ -696,6 +696,66 @@ fn fix_autostart() -> Result<(), String> {
     set_autostart(true)
 }
 
+// ── Uninstall / Cleanup ────────────────────────────────────────────────
+
+/// Remove all app data so the user can cleanly delete the executable.
+///
+/// Cleans up:
+///   1. models/ directory (Whisper, LLM, Piper exe, Piper voices)
+///   2. %TEMP%/dictator-certs/ (Tailscale certificates)
+///   3. Autostart registry entry (if present)
+///
+/// Returns a JSON summary of what was removed and any errors encountered.
+#[tauri::command]
+fn uninstall_cleanup() -> serde_json::Value {
+    use std::os::windows::process::CommandExt;
+    let mut removed = Vec::<String>::new();
+    let mut errors = Vec::<String>::new();
+
+    // 1. Delete models directory
+    let models = model_manager::models_dir();
+    if models.exists() {
+        match std::fs::remove_dir_all(&models) {
+            Ok(_) => removed.push(format!("Models directory: {}", models.display())),
+            Err(e) => errors.push(format!("Failed to delete models dir: {e}")),
+        }
+    }
+
+    // 2. Delete Tailscale cert directory
+    let cert_dir = std::env::temp_dir().join("dictator-certs");
+    if cert_dir.exists() {
+        match std::fs::remove_dir_all(&cert_dir) {
+            Ok(_) => removed.push(format!("Certificates: {}", cert_dir.display())),
+            Err(e) => errors.push(format!("Failed to delete cert dir: {e}")),
+        }
+    }
+
+    // 3. Remove autostart registry entry (ignore if not present)
+    let reg_output = std::process::Command::new("reg")
+        .args([
+            "delete",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "Dictator",
+            "/f",
+        ])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output();
+    match reg_output {
+        Ok(o) if o.status.success() => {
+            removed.push("Autostart registry entry".into());
+        }
+        _ => {
+            // Not an error — entry may simply not exist
+        }
+    }
+
+    serde_json::json!({
+        "removed": removed,
+        "errors": errors,
+    })
+}
+
 // ── Version Check ───────────────────────────────────────────────────────
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1373,6 +1433,7 @@ fn main() {
             get_models_dir,
             get_app_version,
             check_for_updates,
+            uninstall_cleanup,
         ])
         .setup(move |app| {
             let transcriber_handle = transcriber.clone();

@@ -904,6 +904,42 @@
         </div>
 
         <div id="versionInfo" style="font-size:11px; color:var(--text-muted); margin:4px 0; text-align:right;"></div>
+
+        <hr style="border:none; border-top:1px solid var(--border); margin:16px 0;">
+        <div style="margin-bottom:4px;">
+          <label style="color:var(--danger); font-weight:600; font-size:13px;">Uninstall</label>
+          <div style="font-size:11px; color:var(--text-muted); margin:4px 0 10px; line-height:1.5;">
+            Remove all downloaded models, certificates, settings, and the autostart entry. After cleanup you can delete the app folder.
+          </div>
+          <button id="uninstallBtn" style="
+            background: var(--danger-glow);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+          ">Remove all app data</button>
+          <div id="uninstallConfirm" style="display:none; margin-top:10px; padding:12px; background:var(--danger-glow); border:1px solid var(--danger); border-radius:8px;">
+            <div style="font-size:12px; color:var(--danger); margin-bottom:10px; font-weight:600;">
+              This will permanently delete all models and settings. Are you sure?
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button id="uninstallYes" style="
+                flex:1; background:var(--danger); color:#fff; border:none; border-radius:6px;
+                padding:8px; font-size:12px; font-weight:600; cursor:pointer;
+              ">Yes, remove everything</button>
+              <button id="uninstallNo" style="
+                flex:1; background:var(--border); color:var(--text-dim); border:none; border-radius:6px;
+                padding:8px; font-size:12px; cursor:pointer;
+              ">Cancel</button>
+            </div>
+          </div>
+          <div id="uninstallResult" style="display:none; margin-top:10px; padding:10px 12px; border-radius:8px; font-size:12px; line-height:1.6;"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -2529,6 +2565,68 @@
       } catch (e) {
         versionInfo.textContent = 'Could not check for updates';
       }
+    }
+
+    // ── Uninstall ───────────────────────────────────────────────────────
+    {
+      const uninstallBtn = document.getElementById('uninstallBtn');
+      const uninstallConfirm = document.getElementById('uninstallConfirm');
+      const uninstallYes = document.getElementById('uninstallYes');
+      const uninstallNo = document.getElementById('uninstallNo');
+      const uninstallResult = document.getElementById('uninstallResult');
+
+      uninstallBtn.addEventListener('click', () => {
+        uninstallConfirm.style.display = 'block';
+        uninstallResult.style.display = 'none';
+      });
+
+      uninstallNo.addEventListener('click', () => {
+        uninstallConfirm.style.display = 'none';
+      });
+
+      uninstallYes.addEventListener('click', async () => {
+        uninstallConfirm.style.display = 'none';
+        uninstallBtn.disabled = true;
+        uninstallBtn.textContent = 'Cleaning up…';
+
+        try {
+          const result = await invoke('uninstall_cleanup');
+
+          // Clear all localStorage settings
+          const keys = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('dictator-')) keys.push(k);
+          }
+          keys.forEach(k => localStorage.removeItem(k));
+
+          // Show results
+          let html = '';
+          if (result.removed.length > 0) {
+            html += '<div style="color:var(--text);margin-bottom:4px;font-weight:600;">Removed:</div>';
+            html += result.removed.map(r => '&bull; ' + r).join('<br>');
+          }
+          html += '<br>&bull; Browser settings (localStorage)';
+          if (result.errors.length > 0) {
+            html += '<div style="color:var(--danger);margin-top:8px;font-weight:600;">Errors:</div>';
+            html += result.errors.map(e => '&bull; ' + e).join('<br>');
+          }
+          html += '<div style="margin-top:10px;color:var(--text-dim);">You can now close the app and delete the app folder.</div>';
+
+          uninstallResult.style.display = 'block';
+          uninstallResult.style.background = 'var(--bg-card)';
+          uninstallResult.style.border = '1px solid var(--border)';
+          uninstallResult.innerHTML = html;
+          uninstallBtn.textContent = 'Done — data removed';
+        } catch (e) {
+          uninstallResult.style.display = 'block';
+          uninstallResult.style.background = 'var(--danger-glow)';
+          uninstallResult.style.border = '1px solid var(--danger)';
+          uninstallResult.innerHTML = '<span style="color:var(--danger);">Cleanup failed: ' + e + '</span>';
+          uninstallBtn.disabled = false;
+          uninstallBtn.textContent = 'Remove all app data';
+        }
+      });
     }
 
     // ── Init ────────────────────────────────────────────────────────────
