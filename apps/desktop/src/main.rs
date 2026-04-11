@@ -1546,11 +1546,23 @@ fn main() {
             let autoformat_item = tauri::menu::MenuItem::with_id(
                 app, "autoformat", "Auto Format: Off", true, None::<&str>,
             )?;
+            let fmt_light = tauri::menu::MenuItem::with_id(app, "fmt_light_clean_up", &fmt_label("light_clean_up", "Light Cleanup"), true, None::<&str>)?;
             let fmt_clean = tauri::menu::MenuItem::with_id(app, "fmt_clean_up", &fmt_label("clean_up", "Clean Up"), true, None::<&str>)?;
-            let fmt_email = tauri::menu::MenuItem::with_id(app, "fmt_email", &fmt_label("email", "Email"), true, None::<&str>)?;
+            let fmt_strict = tauri::menu::MenuItem::with_id(app, "fmt_strict_clean_up", &fmt_label("strict_clean_up", "Strict Cleanup"), true, None::<&str>)?;
+            let fmt_casual_email = tauri::menu::MenuItem::with_id(app, "fmt_casual_email", &fmt_label("casual_email", "Casual Email"), true, None::<&str>)?;
+            let fmt_pro_email = tauri::menu::MenuItem::with_id(app, "fmt_professional_email", &fmt_label("professional_email", "Professional Email"), true, None::<&str>)?;
+            let fmt_letter = tauri::menu::MenuItem::with_id(app, "fmt_formal_letter", &fmt_label("formal_letter", "Formal Letter"), true, None::<&str>)?;
+            let fmt_bullet = tauri::menu::MenuItem::with_id(app, "fmt_bullet_summary", &fmt_label("bullet_summary", "Bullet Summary"), true, None::<&str>)?;
             let fmt_notes = tauri::menu::MenuItem::with_id(app, "fmt_meeting_notes", &fmt_label("meeting_notes", "Meeting Notes"), true, None::<&str>)?;
             let fmt_docs = tauri::menu::MenuItem::with_id(app, "fmt_documentation", &fmt_label("documentation", "Documentation"), true, None::<&str>)?;
             let fmt_msg = tauri::menu::MenuItem::with_id(app, "fmt_message", &fmt_label("message", "Message"), true, None::<&str>)?;
+
+            let cleanup_sub = tauri::menu::Submenu::with_items(app, "Cleanup", true, &[
+                &fmt_light, &fmt_clean, &fmt_strict,
+            ])?;
+            let email_sub = tauri::menu::Submenu::with_items(app, "Email", true, &[
+                &fmt_casual_email, &fmt_pro_email,
+            ])?;
 
             let sep1 = PredefinedMenuItem::separator(app)?;
             let cancel_rec_item = tauri::menu::MenuItem::with_id(
@@ -1562,7 +1574,8 @@ fn main() {
 
             let tray_menu = tauri::menu::Menu::with_items(app, &[
                 &autoformat_item,
-                &fmt_clean, &fmt_email, &fmt_notes, &fmt_docs, &fmt_msg,
+                &cleanup_sub, &email_sub,
+                &fmt_letter, &fmt_bullet, &fmt_notes, &fmt_docs, &fmt_msg,
                 &sep1,
                 &cancel_rec_item,
                 &sep2,
@@ -1573,8 +1586,13 @@ fn main() {
             // Clones for the various closures that need menu item access
             let autoformat_item2 = autoformat_item.clone();
             let autoformat_item3 = autoformat_item.clone();
+            let fmt_light2 = fmt_light.clone();
             let fmt_clean2 = fmt_clean.clone();
-            let fmt_email2 = fmt_email.clone();
+            let fmt_strict2 = fmt_strict.clone();
+            let fmt_casual_email2 = fmt_casual_email.clone();
+            let fmt_pro_email2 = fmt_pro_email.clone();
+            let fmt_letter2 = fmt_letter.clone();
+            let fmt_bullet2 = fmt_bullet.clone();
             let fmt_notes2 = fmt_notes.clone();
             let fmt_docs2 = fmt_docs.clone();
             let fmt_msg2 = fmt_msg.clone();
@@ -1648,22 +1666,19 @@ fn main() {
                             let _ = autoformat_item.set_text("Auto Format: On");
                             // Update checkmarks
                             let types = [
-                                (&fmt_clean, "clean_up"),
-                                (&fmt_email, "email"),
-                                (&fmt_notes, "meeting_notes"),
-                                (&fmt_docs, "documentation"),
-                                (&fmt_msg, "message"),
+                                (&fmt_light, "light_clean_up", "Light Cleanup"),
+                                (&fmt_clean, "clean_up", "Clean Up"),
+                                (&fmt_strict, "strict_clean_up", "Strict Cleanup"),
+                                (&fmt_casual_email, "casual_email", "Casual Email"),
+                                (&fmt_pro_email, "professional_email", "Professional Email"),
+                                (&fmt_letter, "formal_letter", "Formal Letter"),
+                                (&fmt_bullet, "bullet_summary", "Bullet Summary"),
+                                (&fmt_notes, "meeting_notes", "Meeting Notes"),
+                                (&fmt_docs, "documentation", "Documentation"),
+                                (&fmt_msg, "message", "Message"),
                             ];
-                            for (item, name) in &types {
+                            for (item, name, display) in &types {
                                 let prefix = if *name == fmt_type { "  ✓ " } else { "  " };
-                                let display = match *name {
-                                    "clean_up" => "Clean Up",
-                                    "email" => "Email",
-                                    "meeting_notes" => "Meeting Notes",
-                                    "documentation" => "Documentation",
-                                    "message" => "Message",
-                                    _ => name,
-                                };
                                 let _ = item.set_text(&format!("{prefix}{display}"));
                             }
                         }
@@ -1710,9 +1725,14 @@ fn main() {
                 use tauri::Listener;
                 app.listen("sync-tray-format", move |event| {
                     let fmt_type = event.payload().trim_matches('"');
-                    let items: [(&tauri::menu::MenuItem<tauri::Wry>, &str, &str); 5] = [
+                    let items: [(&tauri::menu::MenuItem<tauri::Wry>, &str, &str); 10] = [
+                        (&fmt_light2, "light_clean_up", "Light Cleanup"),
                         (&fmt_clean2, "clean_up", "Clean Up"),
-                        (&fmt_email2, "email", "Email"),
+                        (&fmt_strict2, "strict_clean_up", "Strict Cleanup"),
+                        (&fmt_casual_email2, "casual_email", "Casual Email"),
+                        (&fmt_pro_email2, "professional_email", "Professional Email"),
+                        (&fmt_letter2, "formal_letter", "Formal Letter"),
+                        (&fmt_bullet2, "bullet_summary", "Bullet Summary"),
                         (&fmt_notes2, "meeting_notes", "Meeting Notes"),
                         (&fmt_docs2, "documentation", "Documentation"),
                         (&fmt_msg2, "message", "Message"),

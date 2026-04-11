@@ -4,8 +4,13 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum FormatType {
     None,
+    LightCleanUp,
     CleanUp,
-    Email,
+    StrictCleanUp,
+    CasualEmail,
+    ProfessionalEmail,
+    FormalLetter,
+    BulletSummary,
     MeetingNotes,
     Documentation,
     Message,
@@ -37,8 +42,13 @@ impl FormatType {
     pub fn all() -> &'static [FormatType] {
         &[
             FormatType::None,
+            FormatType::LightCleanUp,
             FormatType::CleanUp,
-            FormatType::Email,
+            FormatType::StrictCleanUp,
+            FormatType::CasualEmail,
+            FormatType::ProfessionalEmail,
+            FormatType::FormalLetter,
+            FormatType::BulletSummary,
             FormatType::MeetingNotes,
             FormatType::Documentation,
             FormatType::Message,
@@ -48,8 +58,13 @@ impl FormatType {
     pub fn label(&self) -> &'static str {
         match self {
             FormatType::None => "None (raw text)",
+            FormatType::LightCleanUp => "Light cleanup",
             FormatType::CleanUp => "Clean up",
-            FormatType::Email => "Email",
+            FormatType::StrictCleanUp => "Strict cleanup",
+            FormatType::CasualEmail => "Casual email",
+            FormatType::ProfessionalEmail => "Professional email",
+            FormatType::FormalLetter => "Formal letter",
+            FormatType::BulletSummary => "Bullet summary",
             FormatType::MeetingNotes => "Meeting notes",
             FormatType::Documentation => "Documentation",
             FormatType::Message => "Message",
@@ -60,19 +75,58 @@ impl FormatType {
     pub fn default_instruction(&self) -> &'static str {
         match self {
             FormatType::None => "",
+            FormatType::LightCleanUp => {
+                "Fix only obvious typos, punctuation errors, and capitalization in the \
+                 following dictated text. Keep the speaker's exact wording, phrasing, \
+                 and style completely intact. Do not restructure sentences, remove filler \
+                 words, or change vocabulary. Output ONLY the corrected text. \
+                 No explanations, no notes, no commentary."
+            }
             FormatType::CleanUp => {
                 "Rewrite the following dictated text with correct grammar, punctuation, \
                  and capitalization. Remove filler words (um, uh, like, you know). \
                  Keep the same meaning, tone, and length. Do not add information. \
                  Output ONLY the rewritten text. No explanations, no notes, no commentary."
             }
-            FormatType::Email => {
+            FormatType::StrictCleanUp => {
+                "Thoroughly rewrite the following dictated text for maximum clarity and \
+                 coherence. Fix all grammar, punctuation, and capitalization. Remove filler \
+                 words and false starts. If the speaker started a thought, changed their mind, \
+                 and restarted, reconstruct the intended meaning into clean sentences. Assess \
+                 the logical flow and reorder or restructure as needed. Preserve the original \
+                 meaning and all key details but prioritize readability. \
+                 Output ONLY the rewritten text. No explanations, no notes, no commentary."
+            }
+            FormatType::CasualEmail => {
+                "Rewrite the following dictated text as a casual, friendly email. \
+                 Include a greeting and sign-off but keep the tone relaxed and conversational. \
+                 Fix grammar and remove filler words. Keep all original details. \
+                 Do not add information that wasn't in the original. \
+                 Output ONLY the email. No explanations, no notes, no commentary."
+            }
+            FormatType::ProfessionalEmail => {
                 "Rewrite the following dictated text as a professional email. \
                  Include a clear subject line on the first line as 'Subject: ...', \
-                 then a greeting, organized body, and sign-off. \
+                 then a formal greeting, well-organized body, and professional sign-off. \
                  Keep all original details. Fix grammar and punctuation. \
                  Do not add information that wasn't in the original. \
                  Output ONLY the email. No explanations, no notes, no commentary."
+            }
+            FormatType::FormalLetter => {
+                "Rewrite the following dictated text as a formal letter. \
+                 Include the date, a formal salutation, well-structured body paragraphs, \
+                 and a formal closing. Use formal language and tone throughout. \
+                 Include recipient address block if those details are provided. \
+                 Keep all original details. Fix grammar and punctuation. \
+                 Do not add information that wasn't in the original. \
+                 Output ONLY the letter. No explanations, no notes, no commentary."
+            }
+            FormatType::BulletSummary => {
+                "Summarize the following dictated text as a concise bulleted list. \
+                 Extract the key points, decisions, and important details. Use clear, \
+                 brief bullet points. Group related items if appropriate. Preserve all \
+                 important information from the original. \
+                 Output ONLY the bullet-point summary. No explanations, no notes, no commentary."
             }
             FormatType::MeetingNotes => {
                 "Rewrite the following dictated text as structured meeting notes. \
@@ -139,8 +193,13 @@ impl FormatType {
     pub fn key(&self) -> &'static str {
         match self {
             FormatType::None => "none",
+            FormatType::LightCleanUp => "light_clean_up",
             FormatType::CleanUp => "clean_up",
-            FormatType::Email => "email",
+            FormatType::StrictCleanUp => "strict_clean_up",
+            FormatType::CasualEmail => "casual_email",
+            FormatType::ProfessionalEmail => "professional_email",
+            FormatType::FormalLetter => "formal_letter",
+            FormatType::BulletSummary => "bullet_summary",
             FormatType::MeetingNotes => "meeting_notes",
             FormatType::Documentation => "documentation",
             FormatType::Message => "message",
