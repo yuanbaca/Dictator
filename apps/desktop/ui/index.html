@@ -801,7 +801,7 @@
         </div>
 
         <div class="setting-row">
-          <label>Auto-format with AI</label>
+          <label id="autoFormatLabel">Auto-format with AI</label>
           <div class="toggle" id="autoFormatToggle"></div>
         </div>
         <div id="autoFormatHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
@@ -1661,6 +1661,7 @@
       try {
         await invoke('delete_llm_model', { filename });
         await refreshModelList();
+        updateAutoFormatLabel();
       } catch (e) {
         alert('Failed to delete: ' + e);
       }
@@ -1678,6 +1679,7 @@
         downloadStatus.textContent = '';
         setTimeout(() => { modelDownloadArea.style.display = 'none'; }, 2000);
         await refreshModelList();
+        updateAutoFormatLabel();
       } catch (e) {
         downloadLabel.textContent = 'Download failed';
         downloadStatus.textContent = '' + e;
@@ -2087,6 +2089,17 @@
       if (teg) teg.style.display = autoFormatEnabled ? '' : 'none';
     }
 
+    const autoFormatLabelEl = document.getElementById('autoFormatLabel');
+
+    async function updateAutoFormatLabel() {
+      try {
+        const has = await invoke('has_llm_model');
+        autoFormatLabelEl.textContent = has
+          ? 'Auto-format with AI'
+          : 'Auto-format with AI (download needed)';
+      } catch (_) {}
+    }
+
     async function ensureLlmModel() {
       try {
         const hasModel = await invoke('has_llm_model');
@@ -2107,6 +2120,9 @@
         downloadStatus.textContent = '';
         setTimeout(() => { modelDownloadArea.style.display = 'none'; }, 2000);
         modelDownloading = false;
+        // Refresh the model list so it shows "Installed" immediately
+        refreshModelList();
+        updateAutoFormatLabel();
         return true;
       } catch (e) {
         downloadLabel.textContent = 'Download failed';
@@ -2130,6 +2146,7 @@
     const savedAutoFormatType = localStorage.getItem('dictator-autoformat-type');
     if (savedAutoFormatType) autoFormatType.value = savedAutoFormatType;
     updateAutoFormatUI();
+    updateAutoFormatLabel();
 
     autoFormatToggle.addEventListener('click', async () => {
       autoFormatEnabled = autoFormatToggle.classList.toggle('on');
