@@ -2499,10 +2499,12 @@
         }
       } catch (e) { /* ignore */ }
 
-      // Sync auto-format state from localStorage to backend (so tray stays in sync)
+      // Sync auto-format state from localStorage to backend AND tray
       try {
         await invoke('set_auto_format', { enabled: autoFormatEnabled });
         await invoke('set_auto_format_type', { formatType: autoFormatType.value });
+        emit('sync-tray-autoformat', String(autoFormatEnabled));
+        emit('sync-tray-format', autoFormatType.value);
       } catch (e) { /* ignore */ }
 
       try {
