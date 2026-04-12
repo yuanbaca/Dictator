@@ -17,12 +17,15 @@ pub enum FormatType {
 }
 
 /// Chat template format — detected from the model filename.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatFormat {
     /// Phi-3: <|system|>...<|end|> <|user|>...<|end|> <|assistant|>
     Phi3,
     /// Llama 3: <|start_header_id|>system<|end_header_id|>\n\n...<|eot_id|>
     Llama3,
+    /// ChatML: <|im_start|>system\n...<|im_end|> — Mistral, Qwen, Gemma, many others
+    ChatML,
 }
 
 impl ChatFormat {
@@ -31,9 +34,24 @@ impl ChatFormat {
         let lower = model_path.to_lowercase();
         if lower.contains("llama") {
             ChatFormat::Llama3
+        } else if lower.contains("mistral")
+            || lower.contains("qwen")
+            || lower.contains("gemma")
+            || lower.contains("chatml")
+        {
+            ChatFormat::ChatML
         } else {
-            // Default to Phi-3 format (also works for many other models)
+            // Default to Phi-3 format
             ChatFormat::Phi3
+        }
+    }
+
+    /// Human-readable label for this format.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ChatFormat::Phi3 => "Phi-3",
+            ChatFormat::Llama3 => "Llama 3",
+            ChatFormat::ChatML => "ChatML (Mistral/Qwen)",
         }
     }
 }
@@ -184,6 +202,13 @@ impl FormatType {
                      <|start_header_id|>user<|end_header_id|>\n\n\
                      {raw_text}<|eot_id|>\
                      <|start_header_id|>assistant<|end_header_id|>\n\n"
+                )
+            }
+            ChatFormat::ChatML => {
+                format!(
+                    "<|im_start|>system\n{instruction}<|im_end|>\n\
+                     <|im_start|>user\n{raw_text}<|im_end|>\n\
+                     <|im_start|>assistant\n"
                 )
             }
         }

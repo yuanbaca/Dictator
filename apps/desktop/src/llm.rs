@@ -44,9 +44,26 @@ impl Formatter {
         let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
             .map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
 
-        let chat_format = ChatFormat::detect(&model_path.to_string_lossy());
+        let mut chat_format = ChatFormat::detect(&model_path.to_string_lossy());
+        // Check for user override
+        if let Some(filename) = model_path.file_name() {
+            let filename = filename.to_string_lossy();
+            if let Some(override_str) = crate::model_manager::get_chat_format_override(&filename) {
+                if let Ok(fmt) = serde_json::from_value::<ChatFormat>(
+                    serde_json::Value::String(override_str),
+                ) {
+                    chat_format = fmt;
+                    eprintln!("Using user-overridden chat format: {:?}", chat_format);
+                }
+            }
+        }
         eprintln!("LLM loaded successfully (chat format: {:?})", chat_format);
         Ok(Self { backend, model, chat_format })
+    }
+
+    /// The chat format this model is using (auto-detected or overridden).
+    pub fn chat_format(&self) -> ChatFormat {
+        self.chat_format
     }
 
     /// Format raw dictated text using the given format type.
