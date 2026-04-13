@@ -1,6 +1,6 @@
 [package]
 name = "dictator"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 default-run = "dictator"
 
@@ -74,6 +74,10 @@ zip = "2"
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+
+# Windows toast notifications
+notify-rust = "4"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

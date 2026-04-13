@@ -1365,6 +1365,37 @@ fn open_path(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn show_notification(title: String, body: String) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let safe_title = title.replace('"', "&quot;").replace('<', "&lt;");
+    let safe_body = body.replace('"', "&quot;").replace('<', "&lt;");
+
+    let script = [
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+        "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null",
+        &format!(r#"$xml = '<toast duration="short"><visual><binding template="ToastGeneric"><text>{safe_title}</text><text>{safe_body}</text></binding></visual><audio src="ms-winsoundevent:Notification.Default"/></toast>'"#),
+        "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument",
+        "$doc.LoadXml($xml)",
+        "$toast = New-Object Windows.UI.Notifications.ToastNotification $doc",
+        r#"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe").Show($toast)"#,
+    ].join("\n");
+
+    let script_path = std::env::temp_dir().join("dictator_toast.ps1");
+    std::fs::write(&script_path, &script)
+        .map_err(|e| format!("Failed to write notification script: {e}"))?;
+
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+            .arg(&script_path)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn();
+    });
+
+    Ok(())
+}
+
 // ── LLM Formatting commands ─────────────────────────────────────────────
 
 #[tauri::command]
@@ -1533,6 +1564,7 @@ fn main() {
     eprintln!("LAN URL: {lan_url} (self-signed, same WiFi)");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -1652,6 +1684,7 @@ fn main() {
             download_piper_voice,
             delete_piper_voice,
             open_path,
+            show_notification,
             list_formats,
             get_template,
             set_template,

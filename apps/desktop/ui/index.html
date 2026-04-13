@@ -399,6 +399,61 @@
       to   { opacity: 1; transform: translateX(-50%) translateY(0); }
     }
 
+    /* Recording tip — shown during first few recordings */
+    .recording-tip {
+      display: none;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 11px;
+      line-height: 1.5;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+      animation: tipFadeIn 0.4s ease-out;
+    }
+    .recording-tip.visible { display: block; }
+    .recording-tip kbd {
+      display: inline-block;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--accent);
+    }
+    @keyframes tipFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    /* Model badges */
+    .badge-custom {
+      background: #7c4dff;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 10px;
+      border-radius: 10px;
+      vertical-align: middle;
+      display: inline-block;
+      margin-left: 6px;
+    }
+    .badge-installed {
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 10px;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      vertical-align: middle;
+      display: inline-block;
+      margin-left: 6px;
+    }
+
     /* Phone connect info bar */
     .info-bar {
       padding: 10px 24px 14px;
@@ -658,6 +713,7 @@
       <div class="idle-title" id="idleToastTitle">No voice detected — are you still there?</div>
       <div class="idle-keys" id="idleToastKeys"></div>
     </div>
+    <div class="recording-tip" id="recordingTip"></div>
 
     <div class="transcript-area empty" id="transcript">
       Transcribed text will appear here
@@ -1226,6 +1282,7 @@
       if (isRecording) {
         try { await invoke('cancel_recording'); } catch (_) {}
         isRecording = false;
+        hideRecordingTip();
         micBtn.classList.remove('recording');
         if (recTimerInterval) clearInterval(recTimerInterval);
         recTimerInterval = null;
@@ -1604,6 +1661,8 @@
       return sel.value;
     }
 
+    let silenceNotificationShown = false;
+
     function showSilenceReminder() {
       const hk = getRecordingHotkeyLabel();
       idleToastTitle.textContent = 'No voice detected \u2014 are you still there?';
@@ -1611,10 +1670,20 @@
         'Press <kbd>' + hk + '</kbd> to stop recording<br>' +
         'Press <kbd>Escape</kbd> to cancel';
       idleToast.classList.add('visible');
+
+      // Also show a system notification (works when minimized to tray)
+      if (!silenceNotificationShown) {
+        silenceNotificationShown = true;
+        invoke('show_notification', {
+          title: 'Dictator - Are you still there?',
+          body: 'No voice detected. Press ' + hk + ' to stop recording, or Escape to cancel.',
+        }).catch(e => console.error('Silence notification error:', e));
+      }
     }
 
     function hideSilenceReminder() {
       idleToast.classList.remove('visible');
+      silenceNotificationShown = false;
     }
 
     function startSilenceMonitor() {
@@ -1645,6 +1714,49 @@
       hideSilenceReminder();
     }
 
+    // ── Recording tip (first few recordings) ──────────────────────────
+    const recordingTip = document.getElementById('recordingTip');
+    const REC_TIP_MAX = 5;
+
+    function getRecTipParts() {
+      const injectHotkey = localStorage.getItem('dictator-inject-hotkey') || 'none';
+      let hotkeyHtml = '';
+      let hotkeyPlain = '';
+      if (injectHotkey !== 'none') {
+        const keys = injectHotkey.split('+').map(k => '<kbd>' + k.trim() + '</kbd>').join(' + ');
+        hotkeyHtml = ', or press ' + keys + ' to insert later';
+        hotkeyPlain = ', or press ' + injectHotkey + ' to insert later';
+      }
+      return {
+        html: 'Tip: Make sure your cursor is where you want text inserted before stopping.' +
+          ' If you miss it, use the <b>Insert at Cursor</b> button' + hotkeyHtml + '.',
+        plain: 'Make sure your cursor is where you want text inserted before stopping.' +
+          ' If you miss it, use the Insert at Cursor button in the app' + hotkeyPlain + '.',
+      };
+    }
+
+    function showRecordingTip() {
+      const count = parseInt(localStorage.getItem('dictator-rec-tip-count-v2') || '0', 10);
+      if (count >= REC_TIP_MAX) return;
+      localStorage.setItem('dictator-rec-tip-count-v2', String(count + 1));
+
+      const tip = getRecTipParts();
+
+      // Always show the system notification (works even when minimized to tray)
+      invoke('show_notification', {
+        title: 'Dictator - Recording',
+        body: tip.plain,
+      }).catch(e => console.error('Notification error:', e));
+
+      // Also show in-app tip if the window is visible
+      recordingTip.innerHTML = tip.html;
+      recordingTip.classList.add('visible');
+    }
+
+    function hideRecordingTip() {
+      recordingTip.classList.remove('visible');
+    }
+
     // ── Recording ───────────────────────────────────────────────────────
     micBtn.addEventListener('click', async () => {
       if (micBtn.classList.contains('disabled')) return;
@@ -1663,12 +1775,14 @@
           errorMsg.classList.remove('visible');
           startRecTimer();
           startSilenceMonitor();
+          showRecordingTip();
         } catch (e) {
           showError('Failed to start recording: ' + e);
         }
       } else {
         isRecording = false;
         updateEscapeShortcut();
+        hideRecordingTip();
         micBtn.classList.remove('recording');
         micBtn.classList.add('disabled');
         micHint.textContent = 'Transcribing...';
@@ -1843,13 +1957,12 @@
           const escapedFilename = m.filename.replace(/'/g, "\\'");
           const safeId = m.filename.replace(/[^a-zA-Z0-9_-]/g, '_');
           html += '<div style="background:var(--surface, rgba(255,255,255,0.04));border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;">';
-          // Top row: name + status badge
-          html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
-          html += '<div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px;">' + m.name + '</div>';
+          // Name row
+          html += '<div style="font-size:13px;font-weight:500;margin-bottom:4px;word-break:break-word;">' + m.name;
           if (m.installed && m.custom) {
-            html += '<span style="color:#b388ff;font-size:10px;font-weight:600;white-space:nowrap;padding:2px 10px;border:1px solid #b388ff;border-radius:10px;">Custom</span>';
+            html += ' <span class="badge-custom">Custom</span>';
           } else if (m.installed) {
-            html += '<span style="color:var(--accent);font-size:10px;font-weight:600;white-space:nowrap;padding:2px 10px;border:1px solid var(--accent);border-radius:10px;">Installed</span>';
+            html += ' <span class="badge-installed">Installed</span>';
           }
           html += '</div>';
           // Info row: size + validation status
