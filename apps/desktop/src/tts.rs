@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -194,6 +195,23 @@ pub const PIPER_VOICES: &[PiperVoice] = &[
     },
 ];
 
+/// A custom Piper voice discovered on disk (not in the built-in list).
+pub struct CustomPiperVoice {
+    pub id: String,
+    pub display_name: String,
+    pub model_filename: String,
+    pub config_filename: String,
+    pub size_bytes: u64,
+    pub sample_rate: u32,
+}
+
+/// Read the sample rate from a Piper voice config JSON file.
+fn read_piper_sample_rate(config_path: &Path) -> Option<u32> {
+    let data = std::fs::read_to_string(config_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+    json.get("audio")?.get("sample_rate")?.as_u64().map(|r| r as u32)
+}
+
 /// URL for the piper.exe Windows release.
 const PIPER_EXE_URL: &str = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip";
 
@@ -235,7 +253,12 @@ impl PiperSpeaker {
 
     /// Check if a voice model is installed.
     pub fn has_voice(&self, voice_id: &str) -> bool {
-        if let Some(voice) = PIPER_VOICES.iter().find(|v| v.id == voice_id) {
+        if voice_id.starts_with("custom:") {
+            let stem = &voice_id["custom:".len()..];
+            let model = self.voice_dir.join(format!("{stem}.onnx"));
+            let config = self.voice_dir.join(format!("{stem}.onnx.json"));
+            model.exists() && config.exists()
+        } else if let Some(voice) = PIPER_VOICES.iter().find(|v| v.id == voice_id) {
             self.voice_dir.join(voice.model_filename).exists()
                 && self.voice_dir.join(voice.config_filename).exists()
         } else {
@@ -245,13 +268,22 @@ impl PiperSpeaker {
 
     /// Delete a downloaded voice model.
     pub fn delete_voice(&self, voice_id: &str) -> Result<(), String> {
-        let voice = PIPER_VOICES
-            .iter()
-            .find(|v| v.id == voice_id)
-            .ok_or_else(|| format!("Unknown voice: {voice_id}"))?;
-
-        let model = self.voice_dir.join(voice.model_filename);
-        let config = self.voice_dir.join(voice.config_filename);
+        let (model, config) = if voice_id.starts_with("custom:") {
+            let stem = &voice_id["custom:".len()..];
+            (
+                self.voice_dir.join(format!("{stem}.onnx")),
+                self.voice_dir.join(format!("{stem}.onnx.json")),
+            )
+        } else {
+            let voice = PIPER_VOICES
+                .iter()
+                .find(|v| v.id == voice_id)
+                .ok_or_else(|| format!("Unknown voice: {voice_id}"))?;
+            (
+                self.voice_dir.join(voice.model_filename),
+                self.voice_dir.join(voice.config_filename),
+            )
+        };
 
         if model.exists() {
             std::fs::remove_file(&model)
@@ -264,17 +296,94 @@ impl PiperSpeaker {
         Ok(())
     }
 
-    /// List installed voice IDs.
+    /// List installed voice IDs (built-in + custom).
     pub fn installed_voices(&self) -> Vec<String> {
-        PIPER_VOICES
+        let mut voices: Vec<String> = PIPER_VOICES
             .iter()
             .filter(|v| self.has_voice(v.id))
             .map(|v| v.id.to_string())
-            .collect()
+            .collect();
+        for cv in self.discover_custom_voices() {
+            voices.push(cv.id);
+        }
+        voices
     }
 
     pub fn set_voice(&self, voice_id: &str) {
         *self.current_voice.lock().unwrap() = voice_id.to_string();
+    }
+
+    /// Discover custom voice files in the voice directory.
+    /// Returns voices that have both `.onnx` and `.onnx.json` and aren't built-in.
+    pub fn discover_custom_voices(&self) -> Vec<CustomPiperVoice> {
+        let mut custom = Vec::new();
+        let entries = match std::fs::read_dir(&self.voice_dir) {
+            Ok(e) => e,
+            Err(_) => return custom,
+        };
+
+        // Collect built-in model filenames for exclusion
+        let builtin_files: HashSet<&str> =
+            PIPER_VOICES.iter().map(|v| v.model_filename).collect();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let filename = match path.file_name().and_then(|f| f.to_str()) {
+                Some(f) => f.to_string(),
+                None => continue,
+            };
+
+            // Only look at .onnx files (skip .onnx.json)
+            if !filename.ends_with(".onnx") || filename.ends_with(".onnx.json") {
+                continue;
+            }
+
+            // Skip built-in voices
+            if builtin_files.contains(filename.as_str()) {
+                continue;
+            }
+
+            // Check matching config exists
+            let config_filename = format!("{filename}.json");
+            let config_path = self.voice_dir.join(&config_filename);
+            if !config_path.exists() {
+                continue;
+            }
+
+            // Read sample rate from config
+            let sample_rate = read_piper_sample_rate(&config_path).unwrap_or(22050);
+
+            // File size
+            let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+            // Generate display name from filename stem
+            let stem = filename.trim_end_matches(".onnx");
+            let display_name = stem
+                .replace(['-', '_'], " ")
+                .split_whitespace()
+                .map(|w| {
+                    let mut c = w.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let id = format!("custom:{stem}");
+
+            custom.push(CustomPiperVoice {
+                id,
+                display_name,
+                model_filename: filename,
+                config_filename,
+                size_bytes,
+                sample_rate,
+            });
+        }
+
+        custom
     }
 
     /// Speak text using piper.exe. Generates WAV then plays via rodio.
@@ -284,17 +393,31 @@ impl PiperSpeaker {
             return Err("No Piper voice selected".to_string());
         }
 
-        let voice = PIPER_VOICES
-            .iter()
-            .find(|v| v.id == voice_id)
-            .ok_or_else(|| format!("Unknown voice: {voice_id}"))?;
-
-        let model_path = self.voice_dir.join(voice.model_filename);
-        let config_path = self.voice_dir.join(voice.config_filename);
-
-        if !model_path.exists() {
-            return Err(format!("Voice model not found: {}", voice.model_filename));
-        }
+        // Resolve model path, config path, and sample rate for built-in or custom voices
+        let (model_path, config_path, sample_rate) = if voice_id.starts_with("custom:") {
+            let stem = &voice_id["custom:".len()..];
+            let model = self.voice_dir.join(format!("{stem}.onnx"));
+            let config = self.voice_dir.join(format!("{stem}.onnx.json"));
+            if !model.exists() {
+                return Err(format!("Custom voice model not found: {stem}.onnx"));
+            }
+            if !config.exists() {
+                return Err(format!("Custom voice config not found: {stem}.onnx.json"));
+            }
+            let sr = read_piper_sample_rate(&config).unwrap_or(22050);
+            (model, config, sr)
+        } else {
+            let voice = PIPER_VOICES
+                .iter()
+                .find(|v| v.id == voice_id)
+                .ok_or_else(|| format!("Unknown voice: {voice_id}"))?;
+            let model = self.voice_dir.join(voice.model_filename);
+            let config = self.voice_dir.join(voice.config_filename);
+            if !model.exists() {
+                return Err(format!("Voice model not found: {}", voice.model_filename));
+            }
+            (model, config, voice.sample_rate)
+        };
 
         let piper_exe = self.piper_exe();
         if !piper_exe.exists() {
@@ -341,7 +464,7 @@ impl PiperSpeaker {
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
 
-        let source = rodio::buffer::SamplesBuffer::new(1, voice.sample_rate, samples);
+        let source = rodio::buffer::SamplesBuffer::new(1, sample_rate, samples);
 
         let (_stream, stream_handle) =
             rodio::OutputStream::try_default().map_err(|e| format!("Audio output error: {e}"))?;

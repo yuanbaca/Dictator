@@ -10,7 +10,7 @@ use dictator::templates::{ChatFormat, FormatType};
 use dictator::transcription;
 use dictator::tts;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
@@ -19,6 +19,9 @@ use tauri::{Emitter, Manager, State};
 struct RecordingSession {
     stop_flag: Arc<AtomicBool>,
     samples: Arc<Mutex<Vec<f32>>>,
+    /// Maximum audio peak since last read — enables real-time silence detection.
+    /// Stored as f32 bits via `to_bits()`; read-and-reset via `swap(0, Relaxed)`.
+    peak_level: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -310,13 +313,15 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let peak_level = Arc::new(AtomicU32::new(0));
 
     let stop_clone = stop_flag.clone();
     let samples_clone = samples.clone();
+    let peak_clone = peak_level.clone();
     let device_name = state.selected_device.lock().unwrap().clone();
 
     let thread = std::thread::spawn(move || {
-        match audio_capture::record_until_stopped(stop_clone, device_name) {
+        match audio_capture::record_until_stopped(stop_clone, device_name, peak_clone) {
             Ok(recorded) => {
                 *samples_clone.lock().unwrap() = recorded;
             }
@@ -329,6 +334,7 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
     *rec_guard = Some(RecordingSession {
         stop_flag,
         samples,
+        peak_level,
         thread: Some(thread),
     });
 
@@ -389,6 +395,18 @@ fn cancel_recording(state: State<AppState>) -> Result<(), String> {
         let _ = thread.join();
     }
     Ok(())
+}
+
+/// Returns the peak audio level since the last read and resets to zero.
+/// The frontend polls this during recording to detect silence.
+#[tauri::command]
+fn get_recording_level(state: State<AppState>) -> f32 {
+    let guard = state.recording.lock().unwrap();
+    if let Some(session) = guard.as_ref() {
+        f32::from_bits(session.peak_level.swap(0, Ordering::Relaxed))
+    } else {
+        0.0
+    }
 }
 
 /// Dynamically register Escape as a global shortcut (while recording/TTS).
@@ -477,13 +495,24 @@ fn get_autostart() -> serde_json::Value {
         _ => return serde_json::json!({"enabled": false, "stale": false}),
     };
 
-    // Parse the stored path from reg output ("    Dictator    REG_SZ    C:\path\to\exe")
+    // Parse the stored value from reg output ("    Dictator    REG_SZ    \"C:\path\to\exe\" --minimized")
     let stdout = String::from_utf8_lossy(&ok_output.stdout);
-    let stored_path = stdout
+    let stored_raw = stdout
         .lines()
         .find(|l| l.contains("Dictator"))
         .and_then(|l| l.split("REG_SZ").nth(1))
         .map(|p| p.trim().to_string());
+
+    // Extract just the exe path: strip quotes and any trailing flags like --minimized
+    let stored_path = stored_raw.as_deref().map(|s| {
+        let s = s.trim().trim_start_matches('"');
+        // If quoted, take up to closing quote; otherwise take up to first space
+        if let Some(end) = s.find('"') {
+            s[..end].to_string()
+        } else {
+            s.split_whitespace().next().unwrap_or(s).to_string()
+        }
+    });
 
     let current_exe = std::env::current_exe()
         .ok()
@@ -663,6 +692,8 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     if enabled {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let exe_str = exe.to_str().ok_or("Invalid exe path")?;
+        // Quote the path and append --minimized so the app starts hidden to tray
+        let reg_value = format!("\"{}\" --minimized", exe_str);
         let output = std::process::Command::new("reg")
             .args([
                 "add",
@@ -672,7 +703,7 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
                 "/t",
                 "REG_SZ",
                 "/d",
-                exe_str,
+                &reg_value,
                 "/f",
             ])
             .creation_flags(0x08000000)
@@ -1156,7 +1187,7 @@ fn has_piper(state: State<AppState>) -> bool {
 
 #[tauri::command]
 fn list_piper_voices(state: State<AppState>) -> Vec<serde_json::Value> {
-    tts::PIPER_VOICES
+    let mut voices: Vec<serde_json::Value> = tts::PIPER_VOICES
         .iter()
         .map(|v| {
             serde_json::json!({
@@ -1164,9 +1195,28 @@ fn list_piper_voices(state: State<AppState>) -> Vec<serde_json::Value> {
                 "name": v.name,
                 "size_mb": v.size_bytes / 1_000_000,
                 "installed": state.piper.has_voice(v.id),
+                "custom": false,
             })
         })
-        .collect()
+        .collect();
+
+    // Append custom voices discovered on disk
+    for cv in state.piper.discover_custom_voices() {
+        voices.push(serde_json::json!({
+            "id": cv.id,
+            "name": cv.display_name,
+            "size_mb": cv.size_bytes / 1_000_000,
+            "installed": true,
+            "custom": true,
+        }));
+    }
+
+    voices
+}
+
+#[tauri::command]
+fn get_piper_voice_dir(state: State<AppState>) -> String {
+    state.piper.voice_dir().to_string_lossy().to_string()
 }
 
 #[tauri::command]
@@ -1224,6 +1274,17 @@ async fn download_piper_voice(
 #[tauri::command]
 fn delete_piper_voice(state: State<AppState>, voice_id: String) -> Result<(), String> {
     state.piper.delete_voice(&voice_id)
+}
+
+// ── Utility commands ────────────────────────────────────────────────────
+
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to open path: {e}"))?;
+    Ok(())
 }
 
 // ── LLM Formatting commands ─────────────────────────────────────────────
@@ -1451,6 +1512,7 @@ fn main() {
             start_recording,
             stop_and_transcribe,
             cancel_recording,
+            get_recording_level,
             register_escape_shortcut,
             unregister_escape_shortcut,
             inject_text,
@@ -1475,10 +1537,12 @@ fn main() {
             set_tts_engine,
             has_piper,
             list_piper_voices,
+            get_piper_voice_dir,
             set_piper_voice,
             download_piper,
             download_piper_voice,
             delete_piper_voice,
+            open_path,
             list_formats,
             get_template,
             set_template,
@@ -1904,8 +1968,17 @@ fn main() {
                 });
             }
 
-            // Hide to tray when the X button is clicked (instead of quitting)
+            // Show the window unless launched with --minimized (autostart).
+            // The window starts hidden (visible: false in tauri.conf.json) so
+            // that autostart launches can go straight to the system tray.
             let window = app.get_webview_window("main").unwrap();
+            let start_minimized = std::env::args().any(|a| a == "--minimized");
+            if !start_minimized {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+
+            // Hide to tray when the X button is clicked (instead of quitting)
             let win_hide = window.clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {

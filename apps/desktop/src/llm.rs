@@ -147,26 +147,8 @@ impl Formatter {
             n_cur += 1;
         }
 
-        // Strip any trailing parenthetical commentary the model may add
-        // e.g. "(Note: I rephrased...)" or "(The above has been...)"
-        let trimmed = output.trim();
-        let result = if let Some(pos) = trimmed.rfind("\n(") {
-            let after = &trimmed[pos + 1..];
-            if after.ends_with(')') || after.ends_with(").") {
-                trimmed[..pos].trim_end().to_string()
-            } else {
-                trimmed.to_string()
-            }
-        } else if trimmed.starts_with('(') && trimmed.contains(")\n") {
-            // Leading parenthetical note before the actual content
-            if let Some(pos) = trimmed.find(")\n") {
-                trimmed[pos + 2..].trim_start().to_string()
-            } else {
-                trimmed.to_string()
-            }
-        } else {
-            trimmed.to_string()
-        };
+        // Strip meta-commentary that small models append despite instructions.
+        let result = strip_model_commentary(output.trim(), format);
 
         eprintln!(
             "LLM formatted {} chars -> {} chars ({:?})",
@@ -177,6 +159,122 @@ impl Formatter {
 
         Ok(result)
     }
+}
+
+/// Strip meta-commentary that small LLMs often append to formatted text.
+///
+/// Handles several patterns:
+/// 1. Trailing parenthetical notes: `(Note: I rephrased …)`
+/// 2. Leading parenthetical notes: `(The following has been …)\n`
+/// 3. Trailing bullet-point changelogs: `\n- Corrected capitalization\n- Removed filler …`
+///    — skipped for formats that legitimately produce bullets (BulletSummary, MeetingNotes, Documentation)
+/// 4. Trailing "Note:" / "Changes:" blocks
+fn strip_model_commentary(text: &str, format: FormatType) -> String {
+    let mut result = text.to_string();
+
+    // ── Pass 1: strip trailing parenthetical ─────────────────────────
+    // e.g. "(Note: I rephrased...)" at the end
+    let trimmed = result.trim_end();
+    if let Some(pos) = trimmed.rfind("\n(") {
+        let after = &trimmed[pos + 1..];
+        if after.ends_with(')') || after.ends_with(").") {
+            result = trimmed[..pos].trim_end().to_string();
+        }
+    }
+
+    // ── Pass 2: strip leading parenthetical ──────────────────────────
+    // e.g. "(Here is the corrected text.)\n" at the start
+    let trimmed = result.trim_start();
+    if trimmed.starts_with('(') {
+        if let Some(pos) = trimmed.find(")\n") {
+            result = trimmed[pos + 2..].trim_start().to_string();
+        }
+    }
+
+    // ── Pass 3: strip leading "Here is …:" preamble ─────────────────
+    let lower_start = result.trim_start().to_lowercase();
+    if lower_start.starts_with("here is")
+        || lower_start.starts_with("here's")
+        || lower_start.starts_with("below is")
+        || lower_start.starts_with("the corrected")
+        || lower_start.starts_with("the rewritten")
+    {
+        if let Some(pos) = result.find('\n') {
+            let first_line = result[..pos].to_lowercase();
+            if first_line.ends_with(':') || first_line.ends_with("text:") {
+                result = result[pos + 1..].trim_start().to_string();
+            }
+        }
+    }
+
+    // ── Pass 4: strip trailing bullet-point changelog ────────────────
+    // e.g. "- Corrected capitalization\n- Removed filler words"
+    // Skip for formats whose real output IS bullet points.
+    let bullets_are_content = matches!(
+        format,
+        FormatType::BulletSummary | FormatType::MeetingNotes | FormatType::Documentation
+    );
+    let lines: Vec<&str> = result.lines().collect();
+    if lines.len() > 1 && !bullets_are_content {
+        // Walk backwards to find consecutive bullet lines
+        let mut bullet_start = lines.len();
+        for i in (0..lines.len()).rev() {
+            let line = lines[i].trim();
+            if line.starts_with("- ") || line.starts_with("* ") {
+                bullet_start = i;
+            } else if line.is_empty() {
+                // Allow blank lines within the bullet block
+                if bullet_start < lines.len() {
+                    continue;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+
+        if bullet_start < lines.len() {
+            let bullet_text: String = lines[bullet_start..].join(" ").to_lowercase();
+            const META: &[&str] = &[
+                "corrected", "removed", "added", "fixed", "changed", "kept",
+                "rephrased", "capitali", "filler", "punctuation", "grammar",
+                "tone", "meaning", "restructur", "reword", "original text",
+            ];
+            if META.iter().any(|kw| bullet_text.contains(kw)) {
+                let mut end = bullet_start;
+                while end > 0 && lines[end - 1].trim().is_empty() {
+                    end -= 1;
+                }
+                if end > 0 {
+                    result = lines[..end].join("\n");
+                }
+            }
+        }
+    }
+
+    // ── Pass 5: strip trailing "Note:" / "Changes:" block ────────────
+    let lines: Vec<&str> = result.lines().collect();
+    if lines.len() > 1 {
+        for i in (1..lines.len()).rev() {
+            let lower = lines[i].trim().to_lowercase();
+            if lower.starts_with("note:")
+                || lower.starts_with("notes:")
+                || lower.starts_with("changes:")
+                || lower.starts_with("changes made:")
+            {
+                let mut end = i;
+                while end > 0 && lines[end - 1].trim().is_empty() {
+                    end -= 1;
+                }
+                if end > 0 {
+                    result = lines[..end].join("\n");
+                }
+                break;
+            }
+        }
+    }
+
+    result.trim().to_string()
 }
 
 /// Search for an LLM model file, similar to whisper model search.

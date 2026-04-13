@@ -354,6 +354,51 @@
 
     .error-msg.visible { display: block; }
 
+    /* Idle recording reminder toast */
+    .idle-toast {
+      display: none;
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(30, 30, 35, 0.96);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 13px;
+      text-align: center;
+      z-index: 9999;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      max-width: 340px;
+      animation: idleSlideIn 0.3s ease-out;
+    }
+    .idle-toast.visible { display: block; }
+    .idle-toast .idle-title {
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+    .idle-toast .idle-keys {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .idle-toast .idle-keys kbd {
+      display: inline-block;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--accent);
+    }
+    @keyframes idleSlideIn {
+      from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
     /* Phone connect info bar */
     .info-bar {
       padding: 10px 24px 14px;
@@ -609,6 +654,10 @@
 
     <div class="hint-msg" id="hintMsg"></div>
     <div class="error-msg" id="errorMsg"></div>
+    <div class="idle-toast" id="idleToast">
+      <div class="idle-title" id="idleToastTitle">No voice detected — are you still there?</div>
+      <div class="idle-keys" id="idleToastKeys"></div>
+    </div>
 
     <div class="transcript-area empty" id="transcript">
       Transcribed text will appear here
@@ -817,6 +866,19 @@
         <div class="setting-row" id="progressBeepRow" style="display:none; padding-left:18px;">
           <label style="font-size:12px; color:var(--text-muted);">Progress beeps</label>
           <div class="toggle" id="progressBeepToggle"></div>
+        </div>
+
+        <div class="setting-group">
+          <label>Silence reminder</label>
+          <select id="silenceReminderSelect">
+            <option value="0">Off</option>
+            <option value="10">10 seconds</option>
+            <option value="15">15 seconds</option>
+            <option value="20">20 seconds</option>
+            <option value="30">30 seconds (default)</option>
+            <option value="45">45 seconds</option>
+            <option value="60">60 seconds</option>
+          </select>
         </div>
 
         <div class="setting-row">
@@ -1172,6 +1234,7 @@
         progressFill.style.width = '0%';
         setStatus('ready', 'Ready — click the mic to record');
         micHint.textContent = 'Recording cancelled';
+        stopSilenceMonitor();
         stopProgressBeeps();
         soundError();
         setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
@@ -1519,6 +1582,69 @@
       recTimerEl.classList.remove('warning');
     }
 
+    // ── Silence detection & reminder ──────────────────────────────────
+    const idleToast = document.getElementById('idleToast');
+    const idleToastTitle = document.getElementById('idleToastTitle');
+    const idleToastKeys = document.getElementById('idleToastKeys');
+    const SILENCE_AUDIO_THRESHOLD = 0.02; // below this peak = silence
+    const SILENCE_POLL_MS = 500;          // poll backend every 500ms
+
+    // Silence duration from settings (0 = off)
+    let silenceThresholdSec = parseInt(localStorage.getItem('dictator-silence-reminder') || '30', 10);
+    let silencePollInterval = null;
+    let lastSpeechTime = null;
+
+    function getRecordingHotkeyLabel() {
+      const sel = document.getElementById('hotkeySelect');
+      if (sel.value === 'custom') {
+        const customInput = document.getElementById('hotkeyCustomInput');
+        return customInput.value || 'your hotkey';
+      }
+      if (sel.value === 'none') return 'your hotkey';
+      return sel.value;
+    }
+
+    function showSilenceReminder() {
+      const hk = getRecordingHotkeyLabel();
+      idleToastTitle.textContent = 'No voice detected \u2014 are you still there?';
+      idleToastKeys.innerHTML =
+        'Press <kbd>' + hk + '</kbd> to stop recording<br>' +
+        'Press <kbd>Escape</kbd> to cancel';
+      idleToast.classList.add('visible');
+    }
+
+    function hideSilenceReminder() {
+      idleToast.classList.remove('visible');
+    }
+
+    function startSilenceMonitor() {
+      stopSilenceMonitor();
+      if (silenceThresholdSec <= 0) return; // disabled
+      lastSpeechTime = Date.now();
+      silencePollInterval = setInterval(async () => {
+        try {
+          const level = await invoke('get_recording_level');
+          if (level > SILENCE_AUDIO_THRESHOLD) {
+            lastSpeechTime = Date.now();
+            hideSilenceReminder();
+          } else {
+            const silenceMs = Date.now() - lastSpeechTime;
+            if (silenceMs >= silenceThresholdSec * 1000) {
+              showSilenceReminder();
+            }
+          }
+        } catch (_) { /* not recording */ }
+      }, SILENCE_POLL_MS);
+    }
+
+    function stopSilenceMonitor() {
+      if (silencePollInterval) {
+        clearInterval(silencePollInterval);
+        silencePollInterval = null;
+      }
+      hideSilenceReminder();
+    }
+
     // ── Recording ───────────────────────────────────────────────────────
     micBtn.addEventListener('click', async () => {
       if (micBtn.classList.contains('disabled')) return;
@@ -1536,6 +1662,7 @@
           hintMsg.classList.remove('visible');
           errorMsg.classList.remove('visible');
           startRecTimer();
+          startSilenceMonitor();
         } catch (e) {
           showError('Failed to start recording: ' + e);
         }
@@ -1547,6 +1674,7 @@
         micHint.textContent = 'Transcribing...';
         setStatus('transcribing', 'Transcribing...');
         stopRecTimer();
+        stopSilenceMonitor();
         soundRecordStop();
         startProgressBeeps();
         const recDurationSec = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 3;
@@ -1987,18 +2115,27 @@
         const voices = await invoke('list_piper_voices');
         const saved = localStorage.getItem('dictator-piper-voice') || '';
         piperVoiceList.innerHTML = '';
+
+        const builtinVoices = voices.filter(v => !v.custom);
+        const customVoices = voices.filter(v => v.custom);
         const activeVoice = voices.find(v => v.id === saved);
         const installedCount = voices.filter(v => v.installed).length;
+
         piperVoiceSummary.textContent = activeVoice
-          ? '— ' + activeVoice.name + ' (' + installedCount + '/' + voices.length + ' installed)'
+          ? '— ' + activeVoice.name + (activeVoice.custom ? ' (custom)' : '') + ' (' + installedCount + '/' + voices.length + ' installed)'
           : '(' + installedCount + '/' + voices.length + ' installed)';
-        for (const v of voices) {
+
+        // Helper: create a voice card
+        function createVoiceCard(v) {
           const active = v.id === saved;
           const card = document.createElement('div');
           card.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg-card); border:1px solid ' + (active ? 'var(--accent)' : 'var(--border)') + '; border-radius:8px;';
           const info = document.createElement('div');
           info.style.cssText = 'flex:1; min-width:0;';
-          info.innerHTML = '<div style="font-size:13px; font-weight:500;">' + v.name + '</div>'
+          const nameHtml = '<div style="font-size:13px; font-weight:500;">' + v.name
+            + (v.custom ? ' <span style="font-size:9px; padding:1px 6px; border-radius:8px; background:rgba(180,130,255,0.15); color:#b482ff; vertical-align:middle;">Custom</span>' : '')
+            + '</div>';
+          info.innerHTML = nameHtml
             + '<div style="font-size:11px; color:var(--text-muted);">' + v.size_mb + ' MB</div>';
           card.appendChild(info);
           if (v.installed) {
@@ -2011,6 +2148,7 @@
               useBtn.textContent = 'Use';
               useBtn.style.cssText = 'font-size:11px; padding:3px 10px; border:1px solid var(--accent); background:transparent; color:var(--accent); border-radius:6px; cursor:pointer;';
               useBtn.onclick = async () => {
+                await ensurePiperReady(v.id);
                 localStorage.setItem('dictator-piper-voice', v.id);
                 await invoke('set_piper_voice', { voiceId: v.id });
                 await loadPiperVoices();
@@ -2021,7 +2159,7 @@
             delBtn.textContent = 'Delete';
             delBtn.style.cssText = 'font-size:11px; padding:3px 10px; border:1px solid var(--danger); background:transparent; color:var(--danger); border-radius:6px; cursor:pointer;';
             delBtn.onclick = async () => {
-              if (!confirm('Delete voice "' + v.name + '"?')) return;
+              if (!confirm('Delete voice "' + v.name + '"?' + (v.custom ? ' This will remove the files from disk.' : ''))) return;
               try {
                 await invoke('delete_piper_voice', { voiceId: v.id });
                 if (active) localStorage.removeItem('dictator-piper-voice');
@@ -2041,7 +2179,42 @@
             };
             card.appendChild(dlBtn);
           }
-          piperVoiceList.appendChild(card);
+          return card;
+        }
+
+        // Built-in voices
+        for (const v of builtinVoices) {
+          piperVoiceList.appendChild(createVoiceCard(v));
+        }
+
+        // Custom voices section
+        if (customVoices.length > 0) {
+          const divider = document.createElement('div');
+          divider.style.cssText = 'font-size:11px; color:var(--text-muted); padding:6px 0 2px; border-top:1px solid var(--border); margin-top:4px;';
+          divider.textContent = 'Custom voices';
+          piperVoiceList.appendChild(divider);
+          for (const v of customVoices) {
+            piperVoiceList.appendChild(createVoiceCard(v));
+          }
+        }
+
+        // Help note about adding custom voices
+        const helpNote = document.createElement('div');
+        helpNote.style.cssText = 'font-size:11px; color:var(--text-muted); padding:8px 4px 2px; line-height:1.5;';
+        helpNote.innerHTML = 'Add custom voices: place <code>.onnx</code> + <code>.onnx.json</code> Piper voice files in the voices folder. '
+          + '<a href="#" id="openVoiceFolderLink" style="color:var(--accent); text-decoration:underline; cursor:pointer;">Open folder</a>';
+        piperVoiceList.appendChild(helpNote);
+
+        // Wire up the "Open folder" link
+        const openLink = document.getElementById('openVoiceFolderLink');
+        if (openLink) {
+          openLink.onclick = async (e) => {
+            e.preventDefault();
+            try {
+              const dir = await invoke('get_piper_voice_dir');
+              await invoke('open_path', { path: dir });
+            } catch (_) { /* ignore */ }
+          };
         }
       } catch (e) { /* ignore */ }
     }
@@ -2066,7 +2239,11 @@
         }
       }
 
-      // Check voice model
+      // Check voice model — custom voices are always on disk, skip download
+      if (voiceId.startsWith('custom:')) {
+        piperSetupArea.style.display = 'none';
+        return true;
+      }
       const voices = await invoke('list_piper_voices');
       const voice = voices.find(v => v.id === voiceId);
       if (voice && !voice.installed) {
@@ -2315,7 +2492,15 @@
       localStorage.setItem('dictator-progress-beep', progressBeepEnabled);
     });
 
-    // ── Auto-format toggle ──────────────────────────────────────────────
+    // ── Silence reminder dropdown ──────────────────────────────────────
+    const silenceReminderSelect = document.getElementById('silenceReminderSelect');
+    silenceReminderSelect.value = String(silenceThresholdSec);
+    silenceReminderSelect.addEventListener('change', () => {
+      silenceThresholdSec = parseInt(silenceReminderSelect.value, 10);
+      localStorage.setItem('dictator-silence-reminder', silenceThresholdSec);
+    });
+
+    // ── Auto-format toggle ���─────────────────��───────────────────────────
     let autoFormatEnabled = localStorage.getItem('dictator-autoformat') === 'true';
     let modelDownloading = false;
     const autoFormatToggle = document.getElementById('autoFormatToggle');

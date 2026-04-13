@@ -39,6 +39,12 @@ Open the URL shown in the app on your phone's browser, tap the mic button and sp
 
 ## Requirements
 
+### Minimum Hardware
+- **CPU**: Any 64-bit processor (2015 or newer recommended)
+- **RAM**: 4 GB minimum — 8 GB recommended if using AI text formatting
+- **Disk**: ~200 MB for the app + Whisper model, ~2.5 GB additional if using AI formatting (Phi-3 Mini)
+- **GPU**: None required — optional Vulkan-compatible GPU for faster transcription
+
 ### Runtime
 - Windows 10/11
 - Phone and PC on the same WiFi network (for phone dictation via LAN)
