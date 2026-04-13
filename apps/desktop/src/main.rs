@@ -6,7 +6,7 @@ use dictator::llm;
 use dictator::model_manager;
 use dictator::server;
 use dictator::tailscale;
-use dictator::templates::FormatType;
+use dictator::templates::{ChatFormat, FormatType};
 use dictator::transcription;
 use dictator::tts;
 use std::collections::HashMap;
@@ -950,6 +950,59 @@ fn get_models_dir() -> String {
         .to_string()
 }
 
+/// Validate a GGUF model: attempt to load it and report status + detected chat format.
+#[tauri::command]
+fn validate_llm_model(filename: String) -> serde_json::Value {
+    let model_path = model_manager::models_dir().join(&filename);
+    if !model_path.exists() {
+        return serde_json::json!({
+            "valid": false,
+            "error": "File not found",
+            "chat_format": null,
+        });
+    }
+
+    match llm::Formatter::new(&model_path) {
+        Ok(f) => {
+            let fmt = f.chat_format();
+            serde_json::json!({
+                "valid": true,
+                "error": null,
+                "chat_format": fmt,
+            })
+        }
+        Err(e) => {
+            // Still report what format would be detected, even on failure
+            let fmt = ChatFormat::detect(&model_path.to_string_lossy());
+            serde_json::json!({
+                "valid": false,
+                "error": format!("{e}"),
+                "chat_format": fmt,
+            })
+        }
+    }
+}
+
+/// Set the chat format override for a model file, then reset the loaded formatter
+/// so the next format_text call picks up the change.
+#[tauri::command]
+fn set_model_chat_format(state: State<AppState>, filename: String, format: String) -> Result<(), String> {
+    // Validate the format string parses
+    let _: ChatFormat = serde_json::from_value(
+        serde_json::Value::String(format.clone()),
+    )
+    .map_err(|_| format!("Unknown chat format: {format}"))?;
+
+    model_manager::set_chat_format_override(&filename, Some(&format));
+
+    // Clear the loaded formatter so it reloads with the new format on next use
+    *state.formatter.lock().unwrap() = None;
+    *state.llm_status.lock().unwrap() = None;
+    *state.llm_error.lock().unwrap() = None;
+
+    Ok(())
+}
+
 // ── TTS commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1441,6 +1494,8 @@ fn main() {
             download_llm_model,
             delete_llm_model,
             get_models_dir,
+            validate_llm_model,
+            set_model_chat_format,
             get_app_version,
             check_for_updates,
             uninstall_cleanup,

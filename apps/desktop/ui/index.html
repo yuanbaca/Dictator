@@ -1708,8 +1708,10 @@
       try {
         const available = await invoke('list_available_models');
         let html = '';
+        const installedModels = [];
         for (const m of available) {
           const escapedFilename = m.filename.replace(/'/g, "\\'");
+          const safeId = m.filename.replace(/[^a-zA-Z0-9_-]/g, '_');
           html += '<div style="background:var(--surface, rgba(255,255,255,0.04));border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;">';
           // Top row: name + status badge
           html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
@@ -1718,8 +1720,17 @@
             html += '<span style="color:var(--accent);font-size:10px;font-weight:600;white-space:nowrap;padding:2px 10px;border:1px solid var(--accent);border-radius:10px;">Installed</span>';
           }
           html += '</div>';
-          // Info row: size
-          html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">' + m.size_mb + ' MB</div>';
+          // Info row: size + validation status
+          html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">' + m.size_mb + ' MB';
+          if (m.installed) {
+            html += ' &middot; <span id="vstatus-' + safeId + '" style="color:var(--text-muted);">Checking\u2026</span>';
+          }
+          html += '</div>';
+          // Chat format selector (hidden until validation completes)
+          if (m.installed) {
+            html += '<div id="vformat-' + safeId + '" style="display:none;margin-bottom:8px;"></div>';
+            installedModels.push({ filename: m.filename, safeId });
+          }
           // Action button — full width
           if (m.installed) {
             html += '<button onclick="deleteModel(\'' + escapedFilename + '\')" style="width:100%;background:none;border:1px solid var(--text-muted);color:var(--text-muted);border-radius:6px;padding:6px 0;font-size:11px;cursor:pointer;transition:border-color 0.15s,color 0.15s;" onmouseover="this.style.borderColor=\'#e55\';this.style.color=\'#e55\'" onmouseout="this.style.borderColor=\'\';this.style.color=\'\'">Delete</button>';
@@ -1735,10 +1746,54 @@
           const dir = await invoke('get_models_dir');
           document.getElementById('modelsDirPath').textContent = dir;
         } catch (e) { /* ignore */ }
+        // Validate installed models asynchronously
+        for (const { filename, safeId } of installedModels) {
+          validateModel(filename, safeId);
+        }
       } catch (e) {
         modelListEl.innerHTML = '<span style="color:var(--text-muted);">Could not load models</span>';
       }
     }
+
+    async function validateModel(filename, safeId) {
+      const statusEl = document.getElementById('vstatus-' + safeId);
+      const formatEl = document.getElementById('vformat-' + safeId);
+      if (!statusEl) return;
+      try {
+        const result = await invoke('validate_llm_model', { filename });
+        if (result.valid) {
+          statusEl.innerHTML = '<span style="color:var(--accent);">\u2713 Loaded OK</span>';
+          // Show format selector
+          if (formatEl) {
+            const fmt = result.chat_format;
+            const escapedFilename = filename.replace(/'/g, "\\'");
+            formatEl.style.display = '';
+            formatEl.innerHTML =
+              '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<span style="font-size:11px;color:var(--text-muted);">Chat format:</span>' +
+              '<select onchange="setChatFormat(\'' + escapedFilename + '\', this.value)" style="' +
+              'font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--border);' +
+              'border-radius:6px;padding:3px 8px;cursor:pointer;">' +
+              '<option value="phi3"' + (fmt === 'phi3' ? ' selected' : '') + '>Phi-3</option>' +
+              '<option value="llama3"' + (fmt === 'llama3' ? ' selected' : '') + '>Llama 3</option>' +
+              '<option value="chat_ml"' + (fmt === 'chat_ml' ? ' selected' : '') + '>ChatML (Mistral/Qwen)</option>' +
+              '</select></div>';
+          }
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--danger);">\u2717 ' + result.error + '</span>';
+        }
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger);">Validation failed</span>';
+      }
+    }
+
+    window.setChatFormat = async function(filename, format) {
+      try {
+        await invoke('set_model_chat_format', { filename, format });
+      } catch (e) {
+        showError('Failed to set chat format: ' + e);
+      }
+    };
 
     window.deleteModel = async function(filename) {
       if (!confirm('Delete this model? You can re-download it later.')) return;

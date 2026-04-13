@@ -286,3 +286,35 @@ pub fn delete_model(filename: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+// ── Per-model chat format overrides ───────────────────────────────────
+
+fn chat_format_overrides_path() -> PathBuf {
+    models_dir().join("chat_format_overrides.json")
+}
+
+/// Get the user's chat format override for a model file, if any.
+pub fn get_chat_format_override(filename: &str) -> Option<String> {
+    let path = chat_format_overrides_path();
+    let data: std::collections::HashMap<String, String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    data.get(filename).cloned()
+}
+
+/// Set (or clear with None) the user's chat format override for a model file.
+pub fn set_chat_format_override(filename: &str, format: Option<&str>) {
+    let path = chat_format_overrides_path();
+    let mut data: std::collections::HashMap<String, String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    match format {
+        Some(f) => { data.insert(filename.to_string(), f.to_string()); }
+        None => { data.remove(filename); }
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&data) {
+        let _ = std::fs::write(&path, json);
+    }
+}
