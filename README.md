@@ -15,7 +15,7 @@ Open the URL shown in the app on your phone's browser, tap the mic button and sp
 ## Features
 
 - **Local speech-to-text** via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — no internet required, multiple model sizes (tiny to large)
-- **AI text formatting** — optional local LLM cleans up your dictation before insertion. Dictated speech is messy (filler words, run-on sentences, no punctuation). When enabled, a local language model running via [llama.cpp](https://github.com/ggerganov/llama.cpp) reformats the text before it's typed. Presets: Clean up, Email, Meeting notes, Documentation, Message. Downloads a ~2 GB model on first use. You can also drop your own GGUF models into the `models/` folder — the app auto-detects them.
+- **AI text formatting** — optional local LLM via [llama.cpp](https://github.com/ggerganov/llama.cpp) reformats dictated speech before insertion. 10 format presets across 3 cleanup tiers, 2 email styles, formal letter, bullet summary, meeting notes, documentation, and message. Downloads Phi-3 Mini (~2 GB) on first use. Supports custom GGUF models — drop them in `models/` and they auto-appear. Three chat template formats supported: Phi-3, Llama 3, and ChatML (Mistral/Qwen/Gemma). Format is auto-detected from filename or manually selectable in Settings. GGUF files are validated before loading.
 - **Neural text-to-speech** — highlight text anywhere and hear it read aloud using [Piper](https://github.com/rhasspy/piper) neural voices or Windows SAPI. Pause/resume with the same hotkey. 10+ downloadable voice models.
 - **Configurable hotkeys** — record, inject text, and read-aloud each have their own global hotkey. Works from any app without switching windows.
 - **AI formatting from the system tray** — left-click the tray icon to toggle auto-format, right-click to pick a format preset (clean up, email, meeting notes, documentation, message)
@@ -96,8 +96,8 @@ apps/desktop/          Tauri desktop app (Rust backend + HTML frontend)
   src/transcription.rs Whisper integration
   src/tts.rs           Text-to-speech (SAPI + Piper neural voices)
   src/llm.rs           LLM text formatting via llama.cpp
-  src/templates.rs     LLM format presets (clean up, professional, etc.)
-  src/model_manager.rs Whisper/LLM/Piper model discovery and download
+  src/templates.rs     LLM format presets and chat templates (Phi-3, Llama 3, ChatML)
+  src/model_manager.rs Whisper/LLM/Piper model discovery, download, and GGUF validation
   src/tailscale.rs     Tailscale detection and cert generation
   ui/index.html        Desktop UI
   companion/           Phone companion web app
