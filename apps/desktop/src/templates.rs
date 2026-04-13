@@ -46,6 +46,15 @@ impl ChatFormat {
         }
     }
 
+    /// Stable string key matching the serde serialization and frontend dropdown values.
+    pub fn key(&self) -> &'static str {
+        match self {
+            ChatFormat::Phi3 => "phi3",
+            ChatFormat::Llama3 => "llama3",
+            ChatFormat::ChatML => "chat_ml",
+        }
+    }
+
     /// Human-readable label for this format.
     pub fn label(&self) -> &'static str {
         match self {

@@ -812,6 +812,20 @@ fn get_app_version() -> String {
 const VERSION_CHECK_URL: &str =
     "https://gist.githubusercontent.com/yuanbaca/0a44d0642f6e774ab3776bda7fd870a1/raw/version.json";
 
+/// Compare two semver strings (e.g. "0.3.1" vs "0.3.0").
+/// Returns true if `remote` is strictly newer than `local`.
+fn is_newer_version(remote: &str, local: &str) -> bool {
+    let parse = |s: &str| -> (u32, u32, u32) {
+        let mut parts = s.split('.').filter_map(|p| p.parse::<u32>().ok());
+        (
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+        )
+    };
+    parse(remote) > parse(local)
+}
+
 #[tauri::command]
 async fn check_for_updates() -> serde_json::Value {
     let current = APP_VERSION;
@@ -830,7 +844,7 @@ async fn check_for_updates() -> serde_json::Value {
                 return serde_json::json!({
                     "current": current,
                     "latest": latest,
-                    "update_available": latest != current && !latest.is_empty(),
+                    "update_available": !latest.is_empty() && is_newer_version(latest, current),
                     "url": url,
                 });
             }
@@ -931,7 +945,14 @@ fn load_whisper_model(state: State<AppState>, app_handle: tauri::AppHandle) -> R
 
 #[tauri::command]
 fn list_available_models() -> Vec<serde_json::Value> {
-    model_manager::AVAILABLE_MODELS
+    let dir = model_manager::models_dir();
+    let known_filenames: std::collections::HashSet<&str> = model_manager::AVAILABLE_MODELS
+        .iter()
+        .map(|m| m.filename)
+        .collect();
+
+    // Start with known models (downloadable)
+    let mut results: Vec<serde_json::Value> = model_manager::AVAILABLE_MODELS
         .iter()
         .map(|m| {
             serde_json::json!({
@@ -939,10 +960,38 @@ fn list_available_models() -> Vec<serde_json::Value> {
                 "name": m.name,
                 "filename": m.filename,
                 "size_mb": m.size_bytes / 1_000_000,
-                "installed": model_manager::models_dir().join(m.filename).exists(),
+                "installed": dir.join(m.filename).exists(),
+                "custom": false,
             })
         })
-        .collect()
+        .collect();
+
+    // Discover custom GGUF files not in the known list
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "gguf") {
+                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if !known_filenames.contains(filename.as_str()) {
+                    let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let display_name = path.file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    results.push(serde_json::json!({
+                        "id": format!("custom:{}", filename),
+                        "name": display_name,
+                        "filename": filename,
+                        "size_mb": size_bytes / 1_000_000,
+                        "installed": true,
+                        "custom": true,
+                    }));
+                }
+            }
+        }
+    }
+
+    results
 }
 
 #[tauri::command]
@@ -968,20 +1017,38 @@ async fn download_llm_model(
 }
 
 #[tauri::command]
-fn delete_llm_model(filename: String) -> Result<(), String> {
-    model_manager::delete_model(&filename)
+fn delete_llm_model(state: State<AppState>, filename: String) -> Result<(), String> {
+    // Unload the formatter first — on Windows the loaded model locks the file
+    *state.formatter.lock().unwrap() = None;
+    *state.llm_status.lock().unwrap() = None;
+
+    // Retry a few times — Windows may take a moment to release memory-mapped handles
+    let mut last_err = String::new();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        match model_manager::delete_model(&filename) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
 }
 
 #[tauri::command]
 fn get_models_dir() -> String {
-    model_manager::models_dir()
+    let path = model_manager::models_dir()
         .canonicalize()
         .unwrap_or_else(|_| model_manager::models_dir())
         .to_string_lossy()
-        .to_string()
+        .to_string();
+    // Strip Windows UNC prefix (\\?\) that canonicalize adds — explorer doesn't like it
+    path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
 }
 
-/// Validate a GGUF model: attempt to load it and report status + detected chat format.
+/// Validate a GGUF model by checking magic bytes — does NOT load the model,
+/// so the file stays unlocked and deletable on Windows.
 #[tauri::command]
 fn validate_llm_model(filename: String) -> serde_json::Value {
     let model_path = model_manager::models_dir().join(&filename);
@@ -993,25 +1060,36 @@ fn validate_llm_model(filename: String) -> serde_json::Value {
         });
     }
 
-    match llm::Formatter::new(&model_path) {
-        Ok(f) => {
-            let fmt = f.chat_format();
-            serde_json::json!({
-                "valid": true,
-                "error": null,
-                "chat_format": fmt,
-            })
-        }
-        Err(e) => {
-            // Still report what format would be detected, even on failure
-            let fmt = ChatFormat::detect(&model_path.to_string_lossy());
-            serde_json::json!({
-                "valid": false,
-                "error": format!("{e}"),
-                "chat_format": fmt,
-            })
+    // Detect the chat format from filename (with user override check)
+    let mut detected = ChatFormat::detect(&model_path.to_string_lossy());
+    if let Some(override_str) = model_manager::get_chat_format_override(&filename) {
+        if let Ok(fmt) = serde_json::from_value::<ChatFormat>(
+            serde_json::Value::String(override_str),
+        ) {
+            detected = fmt;
         }
     }
+    let fmt_key = detected.key();
+
+    // Quick validation: check GGUF magic bytes (0x47 0x47 0x55 0x46 = "GGUF")
+    // This avoids loading the full model which memory-maps the file and blocks deletion on Windows.
+    let valid = match std::fs::File::open(&model_path).and_then(|mut f| {
+        use std::io::Read;
+        let mut magic = [0u8; 4];
+        f.read_exact(&mut magic)?;
+        Ok(magic)
+    }) {
+        Ok(magic) => &magic == b"GGUF",
+        Err(_) => false,
+    };
+
+    let error = if valid { None } else { Some("Not a valid GGUF file".to_string()) };
+
+    serde_json::json!({
+        "valid": valid,
+        "error": error,
+        "chat_format": fmt_key,
+    })
 }
 
 /// Set the chat format override for a model file, then reset the loaded formatter
@@ -1392,9 +1470,40 @@ fn format_text(
         .map_err(|e| format!("{e}"))
 }
 
+// ── Single-instance enforcement ─────────────────────────────────────────
+
+/// Try to acquire a system-wide named mutex. Returns the handle on success.
+/// If another instance already holds it, shows a message and exits.
+fn enforce_single_instance() -> windows::Win32::Foundation::HANDLE {
+    use windows::core::w;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    let handle: HANDLE = unsafe {
+        CreateMutexW(None, true, w!("Global\\DictatorSingleInstance"))
+            .unwrap_or(HANDLE::default())
+    };
+
+    if handle.is_invalid() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION};
+        unsafe {
+            MessageBoxW(
+                None,
+                w!("Dictator is already running.\nCheck the system tray (bottom-right of the taskbar)."),
+                w!("Dictator"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+        std::process::exit(0);
+    }
+
+    handle
+}
+
 // ── App entry point ─────────────────────────────────────────────────────
 
 fn main() {
+    let _mutex = enforce_single_instance();
     let model_path = model_manager::find_whisper_model();
     let transcriber: Arc<Mutex<Option<transcription::Transcriber>>> = Arc::new(Mutex::new(None));
     let formatter: Arc<Mutex<Option<llm::Formatter>>> = Arc::new(Mutex::new(None));
