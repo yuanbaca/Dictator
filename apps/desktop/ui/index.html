@@ -868,12 +868,50 @@
           Highlight text anywhere, press hotkey to hear it read aloud
         </div>
 
+        <div class="setting-group">
+          <label>Reformat selection hotkey</label>
+          <select id="reformatHotkeySelect">
+            <option value="none">Disabled</option>
+            <option value="Ctrl+Shift+F">Ctrl + Shift + F</option>
+            <option value="Ctrl+Shift+G">Ctrl + Shift + G</option>
+            <option value="F12">F12</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <div id="reformatHotkeyCustomRow" style="display:none; margin-top:6px;">
+            <input id="reformatHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+          </div>
+        </div>
+        <div id="reformatHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
+          Highlight text anywhere, press hotkey to reformat with AI
+        </div>
+
         <div id="ttsEngineGroup" class="setting-group" style="display:none;">
           <label>Voice engine</label>
           <select id="ttsEngineSelect">
             <option value="sapi">Windows (built-in)</option>
             <option value="piper">Piper (neural, better quality)</option>
+            <option value="minimax">Minimax (cloud, highest quality)</option>
           </select>
+        </div>
+
+        <div id="minimaxGroup" style="display:none;">
+          <div class="setting-group">
+            <label>Minimax API key</label>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <input id="minimaxApiKeyInput" type="password" placeholder="Enter your Minimax API key..."
+                style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;box-sizing:border-box;">
+              <button id="minimaxTestBtn"
+                style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--accent);color:#fff;font-size:11px;cursor:pointer;white-space:nowrap;">
+                Test
+              </button>
+            </div>
+            <div id="minimaxTestResult" style="font-size:11px; margin-top:4px; display:none;"></div>
+          </div>
+          <div class="setting-group">
+            <label>Minimax voice</label>
+            <select id="minimaxVoiceSelect"></select>
+          </div>
         </div>
 
         <div id="ttsVoiceGroup" class="setting-group" style="display:none;">
@@ -1282,6 +1320,7 @@
       if (isRecording) {
         try { await invoke('cancel_recording'); } catch (_) {}
         isRecording = false;
+        emit('recording-state-changed', 'false');
         hideRecordingTip();
         micBtn.classList.remove('recording');
         if (recTimerInterval) clearInterval(recTimerInterval);
@@ -1765,6 +1804,7 @@
         try {
           await invoke('start_recording');
           isRecording = true;
+          emit('recording-state-changed', 'true');
           updateEscapeShortcut();
           soundRecordStart();
           recordingStartTime = Date.now();
@@ -1781,6 +1821,7 @@
         }
       } else {
         isRecording = false;
+        emit('recording-state-changed', 'false');
         updateEscapeShortcut();
         hideRecordingTip();
         micBtn.classList.remove('recording');
@@ -2194,6 +2235,28 @@
     // Listen for inject-at-cursor hotkey event — skip countdown since user is already focused
     listen('inject-at-cursor', () => { doInject(true); });
 
+    // ── Reformat Selection ─────────────────────────────────────────────
+    const reformatHotkeySelect = document.getElementById('reformatHotkeySelect');
+    const reformatHint = document.getElementById('reformatHint');
+    setupHotkeySelect(reformatHotkeySelect, 'reformatHotkeyCustomRow', 'reformatHotkeyCustomInput', 'dictator-reformat-hotkey', 'set_reformat_hotkey');
+
+    reformatHotkeySelect.addEventListener('change', () => {
+      reformatHint.style.display = reformatHotkeySelect.value !== 'none' ? 'block' : 'none';
+    });
+
+    listen('reformat-selection', async () => {
+      try {
+        soundLlmStart();
+        startProgressBeeps();
+        await invoke('reformat_selection');
+        stopProgressBeeps();
+        soundComplete();
+      } catch (e) {
+        stopProgressBeeps();
+        console.error('Reformat failed:', e);
+      }
+    });
+
     // ── TTS Read Aloud ─────────────────────────────────────────────────
     const ttsHotkeySelect = document.getElementById('ttsHotkeySelect');
     const ttsHint = document.getElementById('ttsHint');
@@ -2208,15 +2271,41 @@
     const piperProgressFill = document.getElementById('piperProgressFill');
     const piperProgressStatus = document.getElementById('piperProgressStatus');
 
+    const minimaxGroup = document.getElementById('minimaxGroup');
+    const minimaxApiKeyInput = document.getElementById('minimaxApiKeyInput');
+    const minimaxVoiceSelect = document.getElementById('minimaxVoiceSelect');
+
     function updateTtsUI() {
       const enabled = ttsHotkeySelect.value !== 'none';
-      const isPiper = ttsEngineSelect.value === 'piper';
+      const engine = ttsEngineSelect.value;
+      const isPiper = engine === 'piper';
+      const isMinimax = engine === 'minimax';
       ttsHint.style.display = enabled ? '' : 'none';
       ttsEngineGroup.style.display = enabled ? '' : 'none';
-      ttsVoiceGroup.style.display = enabled && !isPiper ? '' : 'none';
+      ttsVoiceGroup.style.display = enabled && !isPiper && !isMinimax ? '' : 'none';
       piperVoiceGroup.style.display = enabled && isPiper ? '' : 'none';
-      if (enabled && !isPiper) loadSapiVoices();
+      minimaxGroup.style.display = enabled && isMinimax ? '' : 'none';
+      if (enabled && !isPiper && !isMinimax) loadSapiVoices();
       if (enabled && isPiper) loadPiperVoices();
+      if (enabled && isMinimax) loadMinimaxVoices();
+    }
+
+    async function loadMinimaxVoices() {
+      try {
+        const voices = await invoke('list_minimax_voices');
+        const saved = localStorage.getItem('dictator-minimax-voice') || 'English_Graceful_Lady';
+        minimaxVoiceSelect.innerHTML = '';
+        for (const v of voices) {
+          const opt = document.createElement('option');
+          opt.value = v.id;
+          opt.textContent = v.name;
+          if (v.id === saved) opt.selected = true;
+          minimaxVoiceSelect.appendChild(opt);
+        }
+        // Restore API key
+        const savedKey = localStorage.getItem('dictator-minimax-api-key') || '';
+        minimaxApiKeyInput.value = savedKey;
+      } catch (e) { /* ignore */ }
     }
 
     async function loadSapiVoices() {
@@ -2492,6 +2581,11 @@
         const voiceId = localStorage.getItem('dictator-piper-voice') || 'amy-medium';
         await ensurePiperReady(voiceId);
         await invoke('set_piper_voice', { voiceId });
+      } else if (engine === 'minimax') {
+        const savedKey = localStorage.getItem('dictator-minimax-api-key') || '';
+        if (savedKey) await invoke('set_minimax_api_key', { key: savedKey });
+        const savedVoice = localStorage.getItem('dictator-minimax-voice') || 'English_Graceful_Lady';
+        await invoke('set_minimax_voice', { voiceId: savedVoice });
       }
     });
 
@@ -2500,6 +2594,50 @@
         await invoke('set_tts_voice', { name: ttsVoiceSelect.value });
         localStorage.setItem('dictator-tts-voice', ttsVoiceSelect.value);
       } catch (e) { /* ignore */ }
+    });
+
+    const minimaxTestBtn = document.getElementById('minimaxTestBtn');
+    const minimaxTestResult = document.getElementById('minimaxTestResult');
+
+    minimaxApiKeyInput.addEventListener('change', async () => {
+      const key = minimaxApiKeyInput.value.trim();
+      localStorage.setItem('dictator-minimax-api-key', key);
+      await invoke('set_minimax_api_key', { key });
+    });
+
+    minimaxVoiceSelect.addEventListener('change', async () => {
+      const voiceId = minimaxVoiceSelect.value;
+      localStorage.setItem('dictator-minimax-voice', voiceId);
+      await invoke('set_minimax_voice', { voiceId });
+    });
+
+    minimaxTestBtn.addEventListener('click', async () => {
+      const key = minimaxApiKeyInput.value.trim();
+      if (!key) {
+        minimaxTestResult.style.display = 'block';
+        minimaxTestResult.style.color = 'var(--danger)';
+        minimaxTestResult.textContent = 'Please enter an API key first';
+        return;
+      }
+      // Save key first
+      localStorage.setItem('dictator-minimax-api-key', key);
+      await invoke('set_minimax_api_key', { key });
+
+      minimaxTestBtn.disabled = true;
+      minimaxTestBtn.textContent = 'Testing...';
+      minimaxTestResult.style.display = 'block';
+      minimaxTestResult.style.color = 'var(--text-muted)';
+      minimaxTestResult.textContent = 'Connecting to Minimax API...';
+      try {
+        await invoke('test_minimax_api');
+        minimaxTestResult.style.color = 'var(--success, #4caf50)';
+        minimaxTestResult.textContent = 'API key works! You should hear a test phrase.';
+      } catch (e) {
+        minimaxTestResult.style.color = 'var(--danger)';
+        minimaxTestResult.textContent = 'Failed: ' + e;
+      }
+      minimaxTestBtn.disabled = false;
+      minimaxTestBtn.textContent = 'Test';
     });
 
     // Listen for read-aloud hotkey event
@@ -2517,12 +2655,18 @@
     listen('tts-state', (event) => {
       ttsState = event.payload;
       updateEscapeShortcut();
-      if (ttsState === 'speaking') {
-        setStatus('ready', '🔊 Speaking...');
+      if (ttsState === 'loading') {
+        setStatus('ready', 'Loading voice...');
+        micBtn.classList.add('disabled');
+        startProgressBeeps();
+      } else if (ttsState === 'speaking') {
+        stopProgressBeeps();
+        setStatus('ready', 'Speaking...');
         micBtn.classList.add('disabled');
       } else if (ttsState === 'paused') {
-        setStatus('ready', '⏸ Paused');
+        setStatus('ready', 'Paused');
       } else {
+        stopProgressBeeps();
         setStatus('ready', 'Ready — click the mic to record');
         micBtn.classList.remove('disabled');
         // Restore normal transcript if we were showing TTS text
@@ -3029,6 +3173,14 @@
           try {
             await invoke('set_piper_voice', { voiceId: savedPiperVoice });
           } catch (e) { /* ignore */ }
+        } else if (savedEngine === 'minimax') {
+          // Restore Minimax settings
+          const savedKey = localStorage.getItem('dictator-minimax-api-key') || '';
+          if (savedKey) {
+            try { await invoke('set_minimax_api_key', { key: savedKey }); } catch (e) { /* ignore */ }
+          }
+          const savedVoice = localStorage.getItem('dictator-minimax-voice') || 'English_Graceful_Lady';
+          try { await invoke('set_minimax_voice', { voiceId: savedVoice }); } catch (e) { /* ignore */ }
         } else {
           // Restore SAPI voice
           const savedVoice = localStorage.getItem('dictator-tts-voice');
@@ -3040,6 +3192,16 @@
         }
       }
       updateTtsUI();
+
+      // Restore reformat hotkey
+      const savedReformat = localStorage.getItem('dictator-reformat-hotkey') || 'none';
+      restoreHotkeySelect(reformatHotkeySelect, 'reformatHotkeyCustomRow', 'reformatHotkeyCustomInput', savedReformat);
+      if (savedReformat !== 'none') {
+        reformatHint.style.display = 'block';
+        try {
+          await invoke('set_reformat_hotkey', { preset: savedReformat });
+        } catch (e) { /* ignore */ }
+      }
     }
 
     async function loadAutostartState() {

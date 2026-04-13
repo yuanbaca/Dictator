@@ -107,9 +107,12 @@ impl FormatType {
         match self {
             FormatType::None => "",
             FormatType::LightCleanUp => {
-                "Fix only obvious typos, punctuation errors, and capitalization in the \
-                 following dictated text. Keep the speaker's exact wording, phrasing, \
-                 and style completely intact. Do not restructure sentences, remove filler \
+                "Fix obvious typos, punctuation errors, and capitalization in the \
+                 following dictated text. Also remove duplicated or repeated words \
+                 that happen when the speaker stumbles or restarts a phrase (e.g. \
+                 \"I think I think we should\" becomes \"I think we should\"). \
+                 Keep the speaker's exact wording, phrasing, and style otherwise \
+                 completely intact. Do not restructure sentences, remove filler \
                  words, or change vocabulary.\n\n\
                  IMPORTANT: Your entire response must be the corrected text and nothing else. \
                  Do not list changes you made. Do not explain your edits. \

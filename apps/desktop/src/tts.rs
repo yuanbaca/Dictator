@@ -647,6 +647,123 @@ pub async fn download_piper_voice(
     Ok(())
 }
 
+// ── Minimax Cloud TTS ─────────────────────────────────────────────────
+
+/// Known Minimax voice IDs and display names.
+pub const MINIMAX_VOICES: &[(&str, &str)] = &[
+    ("English_Graceful_Lady", "Graceful Lady (Female)"),
+    ("English_Insightful_Speaker", "Insightful Speaker (Male)"),
+    ("English_radiant_girl", "Radiant Girl (Female)"),
+    ("English_Persuasive_Man", "Persuasive Man (Male)"),
+    ("English_expressive_narrator", "Expressive Narrator"),
+    ("Wise_Woman", "Wise Woman (Female)"),
+    ("Friendly_Person", "Friendly Person"),
+    ("Inspirational_girl", "Inspirational Girl (Female)"),
+    ("Deep_Voice_Man", "Deep Voice Man (Male)"),
+    ("Calm_Woman", "Calm Woman (Female)"),
+    ("Casual_Guy", "Casual Guy (Male)"),
+    ("Lively_Girl", "Lively Girl (Female)"),
+    ("Patient_Man", "Patient Man (Male)"),
+    ("Young_Knight", "Young Knight (Male)"),
+    ("Lovely_Girl", "Lovely Girl (Female)"),
+    ("Sweet_Girl_2", "Sweet Girl (Female)"),
+    ("Elegant_Man", "Elegant Man (Male)"),
+    ("English_Lucky_Robot", "Lucky Robot"),
+];
+
+/// Speak text via Minimax cloud TTS (blocking HTTP call + rodio playback).
+/// Must NOT be called from within a tokio runtime — use std::thread::spawn.
+/// `on_audio_ready` is called once the API returns and audio is about to play.
+pub fn minimax_speak(
+    api_key: &str,
+    voice_id: &str,
+    text: &str,
+    playing: &AtomicBool,
+    sink_holder: &Mutex<Option<rodio::Sink>>,
+    on_audio_ready: impl FnOnce(),
+) -> Result<(), String> {
+    if api_key.is_empty() {
+        return Err("Minimax API key not set".to_string());
+    }
+
+    // Build request JSON
+    let body = serde_json::json!({
+        "model": "speech-02-hd",
+        "text": text,
+        "stream": false,
+        "language_boost": "English",
+        "voice_setting": {
+            "voice_id": voice_id,
+            "speed": 1.0,
+            "vol": 1.0,
+        },
+        "audio_setting": {
+            "sample_rate": 24000,
+            "format": "mp3",
+            "channel": 1,
+        }
+    });
+
+    // Blocking HTTP POST — must run outside tokio runtime
+    let mut resp = ureq::post("https://api.minimax.io/v1/t2a_v2")
+        .header("Authorization", &format!("Bearer {api_key}"))
+        .send_json(&body)
+        .map_err(|e| format!("Minimax API error: {e}"))?;
+
+    let json: serde_json::Value = resp.body_mut().read_json()
+        .map_err(|e| format!("Minimax response parse error: {e}"))?;
+
+    // Check for API errors
+    let status_code = json["base_resp"]["status_code"].as_i64().unwrap_or(-1);
+    if status_code != 0 {
+        let msg = json["base_resp"]["status_msg"].as_str().unwrap_or("Unknown error");
+        return Err(format!("Minimax API error: {msg}"));
+    }
+
+    let hex_audio = json["data"]["audio"].as_str()
+        .ok_or("No audio data in Minimax response")?;
+
+    // Decode hex to bytes
+    let audio_bytes: Vec<u8> = (0..hex_audio.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex_audio[i..i + 2], 16)
+            .map_err(|e| format!("Hex decode error: {e}")))
+        .collect::<Result<Vec<u8>, String>>()?;
+
+    // Play MP3 via rodio
+    on_audio_ready();
+    playing.store(true, Ordering::Relaxed);
+
+    let cursor = std::io::Cursor::new(audio_bytes);
+    let source = rodio::Decoder::new(cursor)
+        .map_err(|e| format!("Audio decode error: {e}"))?;
+
+    let (_stream, stream_handle) =
+        rodio::OutputStream::try_default().map_err(|e| format!("Audio output error: {e}"))?;
+    let sink =
+        rodio::Sink::try_new(&stream_handle).map_err(|e| format!("Audio sink error: {e}"))?;
+
+    sink.append(source);
+    *sink_holder.lock().unwrap() = Some(sink);
+
+    // Wait for playback to finish (or be stopped externally)
+    loop {
+        {
+            let guard = sink_holder.lock().unwrap();
+            match guard.as_ref() {
+                Some(s) if s.empty() => break,
+                None => break,
+                _ => {}
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    playing.store(false, Ordering::Relaxed);
+    *sink_holder.lock().unwrap() = None;
+
+    Ok(())
+}
+
 // ── Capture selected text ──────────────────────────────────────────────
 
 /// Capture currently highlighted/selected text from any application.

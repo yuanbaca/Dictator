@@ -50,12 +50,22 @@ struct AppState {
     inject_hotkey: Mutex<String>,
     /// Read-aloud hotkey preset
     tts_hotkey: Mutex<String>,
+    /// Reformat-selection hotkey preset
+    reformat_hotkey: Mutex<String>,
     /// SAPI TTS speaker (lazy-loaded on first speak)
     speaker: Arc<Mutex<Option<tts::SapiSpeaker>>>,
     /// Piper TTS speaker (neural voices)
     piper: Arc<tts::PiperSpeaker>,
-    /// TTS engine: "sapi" or "piper"
+    /// TTS engine: "sapi", "piper", or "minimax"
     tts_engine: Mutex<String>,
+    /// Minimax API key for cloud TTS
+    minimax_api_key: Mutex<String>,
+    /// Minimax voice ID
+    minimax_voice: Mutex<String>,
+    /// Minimax playback state
+    minimax_playing: Arc<AtomicBool>,
+    /// Minimax sink for stop control
+    minimax_sink: Arc<Mutex<Option<rodio::Sink>>>,
     /// LLM formatter (lazy-loaded on first format request)
     formatter: Arc<Mutex<Option<llm::Formatter>>>,
     /// LLM status: None = not loaded, Some(true) = loaded, Some(false) = failed
@@ -542,6 +552,7 @@ fn register_all_hotkeys(
     rec_preset: &str,
     inject_preset: &str,
     tts_preset: &str,
+    reformat_preset: &str,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -565,14 +576,21 @@ fn register_all_hotkeys(
             .register(sc)
             .map_err(|e| format!("Failed to register read-aloud hotkey: {e}"))?;
     }
+    if let Some(sc) = parse_hotkey_preset(reformat_preset) {
+        app_handle
+            .global_shortcut()
+            .register(sc)
+            .map_err(|e| format!("Failed to register reformat hotkey: {e}"))?;
+    }
     Ok(())
 }
 
-fn get_all_hotkey_presets(state: &AppState) -> (String, String, String) {
+fn get_all_hotkey_presets(state: &AppState) -> (String, String, String, String) {
     let rec = state.hotkey.lock().unwrap().clone();
     let inject = state.inject_hotkey.lock().unwrap().clone();
     let tts = state.tts_hotkey.lock().unwrap().clone();
-    (rec, inject, tts)
+    let reformat = state.reformat_hotkey.lock().unwrap().clone();
+    (rec, inject, tts, reformat)
 }
 
 #[tauri::command]
@@ -581,8 +599,8 @@ fn set_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (_, inject, tts) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &preset, &inject, &tts)?;
+    let (_, inject, tts, reformat) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &preset, &inject, &tts, &reformat)?;
     *state.hotkey.lock().unwrap() = preset;
     Ok(())
 }
@@ -593,8 +611,8 @@ fn set_inject_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (rec, _, tts) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &rec, &preset, &tts)?;
+    let (rec, _, tts, reformat) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &preset, &tts, &reformat)?;
     *state.inject_hotkey.lock().unwrap() = preset;
     Ok(())
 }
@@ -610,9 +628,26 @@ fn set_tts_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (rec, inject, _) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &rec, &inject, &preset)?;
+    let (rec, inject, _, reformat) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &inject, &preset, &reformat)?;
     *state.tts_hotkey.lock().unwrap() = preset;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_reformat_hotkey(state: State<AppState>) -> String {
+    state.reformat_hotkey.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_reformat_hotkey(
+    app_handle: tauri::AppHandle,
+    state: State<AppState>,
+    preset: String,
+) -> Result<(), String> {
+    let (rec, inject, tts, _) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &inject, &tts, &preset)?;
+    *state.reformat_hotkey.lock().unwrap() = preset;
     Ok(())
 }
 
@@ -1119,6 +1154,17 @@ fn speak_text(state: State<AppState>, text: String) -> Result<(), String> {
     let engine = state.tts_engine.lock().unwrap().clone();
     if engine == "piper" {
         state.piper.speak(&text)
+    } else if engine == "minimax" {
+        let api_key = state.minimax_api_key.lock().unwrap().clone();
+        let voice_id = state.minimax_voice.lock().unwrap().clone();
+        let playing = state.minimax_playing.clone();
+        let sink = state.minimax_sink.clone();
+        // Run on a dedicated thread to avoid tokio runtime conflicts
+        let text = text.clone();
+        std::thread::spawn(move || {
+            let _ = tts::minimax_speak(&api_key, &voice_id, &text, &playing, &sink, || {});
+        });
+        Ok(())
     } else {
         let mut guard = state.speaker.lock().unwrap();
         if guard.is_none() {
@@ -1133,6 +1179,13 @@ fn stop_speaking(state: State<AppState>) -> Result<(), String> {
     let engine = state.tts_engine.lock().unwrap().clone();
     if engine == "piper" {
         state.piper.stop();
+        Ok(())
+    } else if engine == "minimax" {
+        let sink = state.minimax_sink.lock().unwrap();
+        if let Some(s) = sink.as_ref() {
+            s.stop();
+        }
+        state.minimax_playing.store(false, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     } else {
         let guard = state.speaker.lock().unwrap();
@@ -1153,18 +1206,24 @@ fn read_selected_text(state: State<AppState>, app_handle: tauri::AppHandle) -> R
             if state.piper.is_paused() {
                 state.piper.resume();
                 let _ = app_handle.emit("tts-state", "speaking");
-                return Ok(());
             } else {
                 state.piper.pause();
                 let _ = app_handle.emit("tts-state", "paused");
-                return Ok(());
             }
+            return Ok(());
+        }
+    } else if engine == "minimax" {
+        if state.minimax_playing.load(std::sync::atomic::Ordering::Relaxed) {
+            let sink = state.minimax_sink.lock().unwrap();
+            if let Some(s) = sink.as_ref() { s.stop(); }
+            state.minimax_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+            let _ = app_handle.emit("tts-state", "idle");
+            return Ok(());
         }
     } else {
         let guard = state.speaker.lock().unwrap();
         if let Some(speaker) = guard.as_ref() {
             if speaker.is_speaking() {
-                // SAPI doesn't support pause — stop instead
                 let _ = speaker.stop();
                 let _ = app_handle.emit("tts-state", "idle");
                 return Ok(());
@@ -1174,9 +1233,10 @@ fn read_selected_text(state: State<AppState>, app_handle: tauri::AppHandle) -> R
 
     let text = tts::capture_selected_text()?;
 
-    // Emit the text to the frontend so it can display it
     let _ = app_handle.emit("tts-text", text.as_str());
-    let _ = app_handle.emit("tts-state", "speaking");
+    // Minimax has a loading phase (API call) before audio plays
+    let initial_state = if engine == "minimax" { "loading" } else { "speaking" };
+    let _ = app_handle.emit("tts-state", initial_state);
 
     if engine == "piper" {
         let piper = state.piper.clone();
@@ -1186,6 +1246,23 @@ fn read_selected_text(state: State<AppState>, app_handle: tauri::AppHandle) -> R
             let _ = handle.emit("tts-state", "idle");
             if let Err(e) = result {
                 eprintln!("TTS error: {e}");
+            }
+        });
+        Ok(())
+    } else if engine == "minimax" {
+        let api_key = state.minimax_api_key.lock().unwrap().clone();
+        let voice_id = state.minimax_voice.lock().unwrap().clone();
+        let playing = state.minimax_playing.clone();
+        let sink = state.minimax_sink.clone();
+        let handle = app_handle.clone();
+        std::thread::spawn(move || {
+            let result = tts::minimax_speak(&api_key, &voice_id, &text, &playing, &sink, {
+                let h = handle.clone();
+                move || { let _ = h.emit("tts-state", "speaking"); }
+            });
+            let _ = handle.emit("tts-state", "idle");
+            if let Err(e) = result {
+                eprintln!("Minimax TTS error: {e}");
             }
         });
         Ok(())
@@ -1205,6 +1282,10 @@ fn stop_tts(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<(), 
     let engine = state.tts_engine.lock().unwrap().clone();
     if engine == "piper" {
         state.piper.stop();
+    } else if engine == "minimax" {
+        let sink = state.minimax_sink.lock().unwrap();
+        if let Some(s) = sink.as_ref() { s.stop(); }
+        state.minimax_playing.store(false, std::sync::atomic::Ordering::Relaxed);
     } else {
         let guard = state.speaker.lock().unwrap();
         if let Some(speaker) = guard.as_ref() {
@@ -1251,11 +1332,61 @@ fn get_tts_engine(state: State<AppState>) -> String {
 
 #[tauri::command]
 fn set_tts_engine(state: State<AppState>, engine: String) -> Result<(), String> {
-    if engine != "sapi" && engine != "piper" {
+    if engine != "sapi" && engine != "piper" && engine != "minimax" {
         return Err(format!("Unknown engine: {engine}"));
     }
     *state.tts_engine.lock().unwrap() = engine;
     Ok(())
+}
+
+#[tauri::command]
+fn get_minimax_api_key(state: State<AppState>) -> String {
+    state.minimax_api_key.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_minimax_api_key(state: State<AppState>, key: String) {
+    *state.minimax_api_key.lock().unwrap() = key;
+}
+
+#[tauri::command]
+fn get_minimax_voice(state: State<AppState>) -> String {
+    state.minimax_voice.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_minimax_voice(state: State<AppState>, voice_id: String) {
+    *state.minimax_voice.lock().unwrap() = voice_id;
+}
+
+#[tauri::command]
+fn list_minimax_voices() -> Vec<serde_json::Value> {
+    tts::MINIMAX_VOICES.iter().map(|(id, name)| {
+        serde_json::json!({ "id": id, "name": name })
+    }).collect()
+}
+
+/// Test the Minimax API key by synthesizing a short phrase.
+/// Runs on a spawned thread to avoid tokio runtime conflicts.
+#[tauri::command]
+fn test_minimax_api(state: State<AppState>) -> Result<String, String> {
+    let api_key = state.minimax_api_key.lock().unwrap().clone();
+    let voice_id = state.minimax_voice.lock().unwrap().clone();
+    if api_key.is_empty() {
+        return Err("No API key set".to_string());
+    }
+    let playing = state.minimax_playing.clone();
+    let sink = state.minimax_sink.clone();
+
+    // Spawn a thread for the blocking HTTP call, then join to get the result
+    let handle = std::thread::spawn(move || {
+        tts::minimax_speak(&api_key, &voice_id, "Hello, this is a test of the Minimax voice.", &playing, &sink, || {})
+    });
+    match handle.join() {
+        Ok(Ok(())) => Ok("success".to_string()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("Thread panicked".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -1501,6 +1632,140 @@ fn format_text(
         .map_err(|e| format!("{e}"))
 }
 
+// ── Reformat selection in-place ─────────────────────────────────────────
+
+/// Grab highlighted text via Ctrl+C, format with LLM, paste back via Ctrl+V.
+#[tauri::command]
+fn reformat_selection(state: State<AppState>) -> Result<String, String> {
+    use arboard::Clipboard;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+
+    let vk_control = VIRTUAL_KEY(0x11);
+    let vk_shift = VIRTUAL_KEY(0x10);
+    let vk_alt = VIRTUAL_KEY(0x12);
+    let vk_c = VIRTUAL_KEY(0x43);
+    let vk_v = VIRTUAL_KEY(0x56);
+
+    fn key_up(vk: VIRTUAL_KEY) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk, wScan: 0, dwFlags: KEYEVENTF_KEYUP, time: 0, dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+    fn key_down(vk: VIRTUAL_KEY) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk, wScan: 0, dwFlags: KEYBD_EVENT_FLAGS(0), time: 0, dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    // 1. Save current clipboard
+    let old_text = {
+        let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
+        cb.get_text().unwrap_or_default()
+    };
+
+    // 2. Ctrl+C to grab selection
+    let copy_inputs = [
+        key_up(vk_shift), key_up(vk_alt), key_up(vk_control),
+        key_down(vk_control), key_down(vk_c), key_up(vk_c), key_up(vk_control),
+    ];
+    unsafe { SendInput(&copy_inputs, std::mem::size_of::<INPUT>() as i32); }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // 3. Read selected text
+    let selected = {
+        let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
+        cb.get_text().unwrap_or_default()
+    };
+    if selected.is_empty() || selected == old_text {
+        if !old_text.is_empty() {
+            if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
+        }
+        return Err("No text selected".to_string());
+    }
+
+    // 4. Format with LLM — only cleanup types allowed, fallback to CleanUp
+    let format_type_key = state.auto_format_type.lock().unwrap().clone();
+    let parsed: FormatType =
+        serde_json::from_value(serde_json::Value::String(format_type_key.clone()))
+            .unwrap_or(FormatType::CleanUp);
+    let format_type = match parsed {
+        FormatType::LightCleanUp | FormatType::CleanUp | FormatType::StrictCleanUp => parsed,
+        _ => FormatType::CleanUp, // non-cleanup formats default to medium
+    };
+
+    // Lazy-load the LLM
+    {
+        let mut guard = state.formatter.lock().unwrap();
+        if guard.is_none() {
+            let model_path = llm::find_llm_model_path().ok_or_else(|| {
+                if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
+                "No LLM model found".to_string()
+            })?;
+            match llm::Formatter::new(&model_path) {
+                Ok(f) => {
+                    *state.llm_status.lock().unwrap() = Some(true);
+                    *guard = Some(f);
+                }
+                Err(e) => {
+                    if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
+                    *state.llm_status.lock().unwrap() = Some(false);
+                    return Err(format!("{e}"));
+                }
+            }
+        }
+    }
+
+    let guard = state.formatter.lock().unwrap();
+    let formatter = guard.as_ref().ok_or("LLM not loaded")?;
+    let customs = state.custom_templates.lock().unwrap();
+    let custom_instruction = customs.get(format_type.key()).cloned();
+    drop(customs);
+
+    let formatted = match formatter.format_text_custom(&selected, format_type, custom_instruction.as_deref()) {
+        Ok(text) => text,
+        Err(e) => {
+            drop(guard);
+            if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
+            return Err(format!("{e}"));
+        }
+    };
+    drop(guard);
+
+    // 5. Set clipboard to formatted text and Ctrl+V to paste
+    {
+        let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
+        cb.set_text(&formatted).map_err(|e| format!("Clipboard error: {e}"))?;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let paste_inputs = [
+        key_up(vk_shift), key_up(vk_alt), key_up(vk_control),
+        key_down(vk_control), key_down(vk_v), key_up(vk_v), key_up(vk_control),
+    ];
+    unsafe { SendInput(&paste_inputs, std::mem::size_of::<INPUT>() as i32); }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // 6. Restore original clipboard
+    if !old_text.is_empty() {
+        if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
+    }
+
+    Ok(formatted)
+}
+
 // ── Single-instance enforcement ─────────────────────────────────────────
 
 /// Try to acquire a system-wide named mutex. Returns the handle on success.
@@ -1585,11 +1850,16 @@ fn main() {
                             let tts_key = state.as_ref().and_then(|s| {
                                 parse_hotkey_preset(&s.tts_hotkey.lock().unwrap())
                             });
+                            let reformat_key = state.as_ref().and_then(|s| {
+                                parse_hotkey_preset(&s.reformat_hotkey.lock().unwrap())
+                            });
 
                             if inject_key.is_some_and(|k| k == *shortcut) {
                                 let _ = win.emit("inject-at-cursor", ());
                             } else if tts_key.is_some_and(|k| k == *shortcut) {
                                 let _ = win.emit("tts-read-aloud", ());
+                            } else if reformat_key.is_some_and(|k| k == *shortcut) {
+                                let _ = win.emit("reformat-selection", ());
                             } else {
                                 let _ = win.emit("toggle-recording", ());
                             }
@@ -1615,12 +1885,17 @@ fn main() {
             hotkey: Mutex::new("Ctrl+Shift+Space".into()),
             inject_hotkey: Mutex::new("none".into()),
             tts_hotkey: Mutex::new("none".into()),
+            reformat_hotkey: Mutex::new("none".into()),
             speaker: Arc::new(Mutex::new(None)),
             piper: Arc::new(tts::PiperSpeaker::new(
                 model_manager::models_dir().join("piper"),
                 model_manager::models_dir().join("piper-voices"),
             )),
             tts_engine: Mutex::new("sapi".into()),
+            minimax_api_key: Mutex::new(String::new()),
+            minimax_voice: Mutex::new("English_Graceful_Lady".into()),
+            minimax_playing: Arc::new(AtomicBool::new(false)),
+            minimax_sink: Arc::new(Mutex::new(None)),
             formatter: formatter.clone(),
             llm_status: Arc::new(Mutex::new(None)),
             llm_error: Mutex::new(None),
@@ -1667,6 +1942,9 @@ fn main() {
             set_inject_hotkey,
             get_tts_hotkey,
             set_tts_hotkey,
+            get_reformat_hotkey,
+            set_reformat_hotkey,
+            reformat_selection,
             speak_text,
             stop_speaking,
             read_selected_text,
@@ -1683,6 +1961,12 @@ fn main() {
             download_piper,
             download_piper_voice,
             delete_piper_voice,
+            get_minimax_api_key,
+            set_minimax_api_key,
+            get_minimax_voice,
+            set_minimax_voice,
+            list_minimax_voices,
+            test_minimax_api,
             open_path,
             show_notification,
             list_formats,
@@ -1777,6 +2061,14 @@ fn main() {
                                 }
                                 continue;
                             }
+                        } else if engine == "minimax" {
+                            if state.minimax_playing.load(std::sync::atomic::Ordering::Relaxed) {
+                                let sink = state.minimax_sink.lock().unwrap();
+                                if let Some(s) = sink.as_ref() { s.stop(); }
+                                state.minimax_playing.store(false, std::sync::atomic::Ordering::Relaxed);
+                                let _ = app_handle_tts.emit("tts-state", "idle");
+                                continue;
+                            }
                         } else {
                             let guard = state.speaker.lock().unwrap();
                             if let Some(s) = guard.as_ref() {
@@ -1793,6 +2085,17 @@ fn main() {
                                 let _ = app_handle_tts.emit("tts-state", "speaking");
                                 let res = if engine == "piper" {
                                     let result = state.piper.speak(&text);
+                                    let _ = app_handle_tts.emit("tts-state", "idle");
+                                    result
+                                } else if engine == "minimax" {
+                                    let api_key = state.minimax_api_key.lock().unwrap().clone();
+                                    let voice_id = state.minimax_voice.lock().unwrap().clone();
+                                    let h = app_handle_tts.clone();
+                                    let result = tts::minimax_speak(
+                                        &api_key, &voice_id, &text,
+                                        &state.minimax_playing, &state.minimax_sink,
+                                        move || { let _ = h.emit("tts-state", "speaking"); },
+                                    );
                                     let _ = app_handle_tts.emit("tts-state", "idle");
                                     result
                                 } else {
@@ -1932,12 +2235,11 @@ fn main() {
             let show_item = tauri::menu::MenuItem::with_id(app, "show", "Show Dictator", true, None::<&str>)?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
+            // Cancel Recording is inserted/removed dynamically via recording-state-changed
             let tray_menu = tauri::menu::Menu::with_items(app, &[
                 &autoformat_item,
                 &cleanup_sub, &email_sub,
                 &fmt_letter, &fmt_bullet, &fmt_notes, &fmt_docs, &fmt_msg,
-                &sep1,
-                &cancel_rec_item,
                 &sep2,
                 &show_item,
                 &quit_item,
@@ -2107,6 +2409,22 @@ fn main() {
                     let enabled = event.payload().trim_matches('"') == "true";
                     let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
                     let _ = autoformat_item3.set_text(label);
+                });
+
+                // Dynamic "Cancel Recording" — insert/remove based on recording state
+                let cancel_sep_dyn = sep1.clone();
+                let cancel_rec_dyn = cancel_rec_item.clone();
+                let tray_menu_dyn = tray_menu.clone();
+                app.listen("recording-state-changed", move |event| {
+                    let recording = event.payload().trim_matches('"') == "true";
+                    if recording {
+                        // Insert separator + cancel item before the bottom separator (position 8)
+                        let _ = tray_menu_dyn.insert(&cancel_sep_dyn, 8);
+                        let _ = tray_menu_dyn.insert(&cancel_rec_dyn, 9);
+                    } else {
+                        let _ = tray_menu_dyn.remove(&cancel_rec_dyn);
+                        let _ = tray_menu_dyn.remove(&cancel_sep_dyn);
+                    }
                 });
             }
 
