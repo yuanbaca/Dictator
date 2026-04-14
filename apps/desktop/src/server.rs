@@ -34,6 +34,7 @@ pub struct ServerState {
     pub auto_format_type: Arc<Mutex<String>>,
     pub cert_type: String,
     pub using_gpu: Arc<Mutex<Option<bool>>>,
+    pub force_cpu: Arc<Mutex<bool>>,
     /// Channel for phone to trigger TTS read-aloud on the desktop.
     pub tts_trigger: Option<std::sync::mpsc::Sender<()>>,
 }
@@ -61,7 +62,7 @@ pub async fn run_server(state: Arc<ServerState>, port: u16, tls: TlsSource) {
                     Json(serde_json::json!({
                         "cert_type": st.cert_type,
                         "gpu": gpu,
-                        "gpu_compiled": transcription::Transcriber::gpu_compiled(),
+                        "gpu_compiled": true,
                         "connected_phones": *st.connected_phones.lock().unwrap(),
                     }))
                 }
@@ -292,12 +293,13 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
 
                                     // Lazy-load LLM if needed, then format
                                     let formatter = state.formatter.clone();
+                                    let fc = *state.force_cpu.lock().unwrap();
                                     let raw = text.clone();
                                     let formatted = tokio::task::spawn_blocking(move || {
                                         let mut guard = formatter.lock().unwrap();
                                         if guard.is_none() {
                                             if let Some(path) = llm::find_llm_model_path() {
-                                                match llm::Formatter::new(&path) {
+                                                match llm::Formatter::new(&path, fc) {
                                                     Ok(f) => { *guard = Some(f); }
                                                     Err(e) => {
                                                         eprintln!("LLM load failed: {e}");

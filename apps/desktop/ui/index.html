@@ -962,6 +962,14 @@
           <div class="toggle" id="progressBeepToggle"></div>
         </div>
 
+        <div class="setting-row">
+          <label>Force CPU mode</label>
+          <div class="toggle" id="forceCpuToggle"></div>
+        </div>
+        <div id="forceCpuHint" style="display:none; font-size:11px; color:var(--text-muted); padding:0 0 8px 4px;">
+          Models will reload on CPU next time they're used
+        </div>
+
         <div class="setting-group">
           <label>Silence reminder</label>
           <select id="silenceReminderSelect">
@@ -1527,6 +1535,7 @@
           setStatus('ready', 'Ready \u2014 click the mic to record');
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Click to start recording';
+          updateGpuStatus().catch(() => {});
         } else if (event.payload === 'no-model') {
           clearInterval(pollStatus);
           setStatus('loading', 'No speech model installed');
@@ -1861,6 +1870,7 @@
           completeProgress();
           stopProgressBeeps();
           soundComplete();
+          updateGpuStatus().catch(() => {}); // refresh after LLM first load
 
           currentText = text;
           transcript.textContent = text;
@@ -2950,6 +2960,20 @@
       }
     });
 
+    const forceCpuToggle = document.getElementById('forceCpuToggle');
+    const forceCpuHint = document.getElementById('forceCpuHint');
+    forceCpuToggle.addEventListener('click', async () => {
+      const isOn = forceCpuToggle.classList.toggle('on');
+      forceCpuHint.style.display = isOn ? 'block' : 'none';
+      localStorage.setItem('dictator-force-cpu', isOn ? '1' : '0');
+      try {
+        await invoke('set_force_cpu', { force: isOn });
+        // Reload the whisper model with new GPU setting
+        await invoke('load_whisper_model');
+        updateGpuStatus();
+      } catch (e) { /* ignore — model reload happens on next use */ }
+    });
+
     micDevice.addEventListener('change', async () => {
       const device = micDevice.value || null;
       await invoke('set_selected_device', { device });
@@ -3017,18 +3041,50 @@
         emit('sync-tray-format', autoFormatType.value);
       } catch (e) { /* ignore */ }
 
-      try {
-        const gpu = await invoke('get_gpu_status');
-        const gpuEl = document.getElementById('gpuStatus');
-        if (gpu.active === true) {
-          gpuEl.textContent = 'GPU acceleration active';
-          gpuEl.className = 'info-text accent';
-        } else if (gpu.compiled) {
-          gpuEl.textContent = 'GPU compiled but using CPU (no compatible GPU found)';
+      try { await updateGpuStatus(); } catch (e) { /* ignore */ }
+
+      // Restore force CPU toggle — sync from localStorage AND tell backend
+      {
+        const savedForceCpu = localStorage.getItem('dictator-force-cpu') === '1';
+        if (savedForceCpu) {
+          forceCpuToggle.classList.add('on');
+          forceCpuHint.style.display = 'block';
         } else {
-          gpuEl.textContent = 'Running on CPU';
+          forceCpuToggle.classList.remove('on');
+          forceCpuHint.style.display = 'none';
         }
-      } catch (e) { /* ignore */ }
+        await invoke('set_force_cpu', { force: savedForceCpu }).catch(() => {});
+      }
+    }
+
+    async function updateGpuStatus() {
+      const gpu = await invoke('get_gpu_status');
+      const gpuEl = document.getElementById('gpuStatus');
+      if (gpu.force_cpu) {
+        gpuEl.textContent = 'Running on CPU (forced)';
+        gpuEl.className = 'info-text muted';
+      } else if (gpu.whisper_gpu === true && gpu.llm_gpu === true) {
+        gpuEl.textContent = 'GPU acceleration active (Whisper + LLM)';
+        gpuEl.className = 'info-text accent';
+      } else if (gpu.whisper_gpu === true && gpu.llm_gpu === null) {
+        gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use GPU when loaded';
+        gpuEl.className = 'info-text accent';
+      } else if (gpu.whisper_gpu === true) {
+        gpuEl.textContent = 'GPU acceleration active (Whisper only)';
+        gpuEl.className = 'info-text accent';
+      } else if (gpu.llm_gpu === true) {
+        gpuEl.textContent = 'GPU acceleration active (LLM only)';
+        gpuEl.className = 'info-text accent';
+      } else if (gpu.whisper_gpu === false && gpu.llm_gpu === null) {
+        gpuEl.textContent = 'Running on CPU — LLM will attempt GPU when loaded';
+        gpuEl.className = 'info-text muted';
+      } else if (gpu.whisper_gpu === false) {
+        gpuEl.textContent = 'Running on CPU';
+        gpuEl.className = 'info-text muted';
+      } else {
+        gpuEl.textContent = 'Loading model...';
+        gpuEl.className = 'info-text muted';
+      }
     }
 
     async function pollPhoneStatus() {

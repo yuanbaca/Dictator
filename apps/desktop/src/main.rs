@@ -40,8 +40,12 @@ struct AppState {
     cert_type: Mutex<String>,
     /// Tailscale URL if Tailscale is available (works from anywhere)
     tailscale_url: Mutex<Option<String>>,
-    /// None while loading, Some(true) for GPU, Some(false) for CPU
+    /// None while loading, Some(true) for GPU, Some(false) for CPU (Whisper)
     using_gpu: Arc<Mutex<Option<bool>>>,
+    /// None while not loaded, Some(true) for GPU, Some(false) for CPU (LLM)
+    llm_using_gpu: Arc<Mutex<Option<bool>>>,
+    /// User preference: force CPU mode (skip GPU for both Whisper and LLM)
+    force_cpu: Arc<Mutex<bool>>,
     /// Selected audio input device name (None = system default)
     selected_device: Arc<Mutex<Option<String>>>,
     /// Current hotkey preset name (e.g. "Ctrl+Shift+Space")
@@ -94,6 +98,7 @@ struct ServerShared {
     auto_format: Arc<Mutex<bool>>,
     auto_format_type: Arc<Mutex<String>>,
     using_gpu: Arc<Mutex<Option<bool>>>,
+    force_cpu: Arc<Mutex<bool>>,
     tts_trigger: std::sync::mpsc::Sender<()>,
 }
 
@@ -215,6 +220,7 @@ fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, Str
                 auto_format_type: ss.auto_format_type.clone(),
                 cert_type: "tailscale".to_string(),
                 using_gpu: ss.using_gpu.clone(),
+                force_cpu: ss.force_cpu.clone(),
                 tts_trigger: Some(ss.tts_trigger.clone()),
             });
 
@@ -306,12 +312,34 @@ fn set_auto_format_type(state: State<AppState>, format_type: String) {
 
 #[tauri::command]
 fn get_gpu_status(state: State<AppState>) -> serde_json::Value {
-    let gpu = *state.using_gpu.lock().unwrap();
-    let compiled = transcription::Transcriber::gpu_compiled();
+    let whisper_gpu = *state.using_gpu.lock().unwrap();
+    let llm_gpu = *state.llm_using_gpu.lock().unwrap();
+    let force_cpu = *state.force_cpu.lock().unwrap();
     serde_json::json!({
-        "compiled": compiled,
-        "active": gpu,
+        "whisper_gpu": whisper_gpu,
+        "llm_gpu": llm_gpu,
+        "force_cpu": force_cpu,
+        // Keep "active" for backward compat with companion page
+        "active": whisper_gpu,
+        "compiled": true,
     })
+}
+
+#[tauri::command]
+fn get_force_cpu(state: State<AppState>) -> bool {
+    *state.force_cpu.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_force_cpu(state: State<AppState>, force: bool) {
+    *state.force_cpu.lock().unwrap() = force;
+    // Models will pick up the new setting on next load/reload.
+    // Clear loaded models so they reload with the new GPU preference.
+    *state.transcriber.lock().unwrap() = None;
+    *state.formatter.lock().unwrap() = None;
+    *state.using_gpu.lock().unwrap() = None;
+    *state.llm_using_gpu.lock().unwrap() = None;
+    *state.llm_status.lock().unwrap() = None;
 }
 
 #[tauri::command]
@@ -956,10 +984,11 @@ fn load_whisper_model(state: State<AppState>, app_handle: tauri::AppHandle) -> R
     *state.no_model.lock().unwrap() = false;
     let transcriber_handle = state.transcriber.clone();
     let gpu_handle = state.using_gpu.clone();
+    let force_cpu = *state.force_cpu.lock().unwrap();
 
     std::thread::spawn(move || {
         eprintln!("Loading whisper model from: {}", model_path.display());
-        match transcription::Transcriber::new(&model_path) {
+        match transcription::Transcriber::new(&model_path, force_cpu) {
             Ok(t) => {
                 let gpu = t.is_using_gpu();
                 *gpu_handle.lock().unwrap() = Some(gpu);
@@ -1603,14 +1632,17 @@ fn format_text(
         if guard.is_none() {
             let model_path = llm::find_llm_model_path()
                 .ok_or("No LLM model found. Place a .gguf file in the models/ folder.")?;
+            let force_cpu = *state.force_cpu.lock().unwrap();
 
-            match llm::Formatter::new(&model_path) {
+            match llm::Formatter::new(&model_path, force_cpu) {
                 Ok(f) => {
+                    *state.llm_using_gpu.lock().unwrap() = Some(f.is_using_gpu());
                     *state.llm_status.lock().unwrap() = Some(true);
                     *guard = Some(f);
                 }
                 Err(e) => {
                     let msg = format!("{e}");
+                    *state.llm_using_gpu.lock().unwrap() = Some(false);
                     *state.llm_status.lock().unwrap() = Some(false);
                     *state.llm_error.lock().unwrap() = Some(msg.clone());
                     return Err(msg);
@@ -1714,13 +1746,16 @@ fn reformat_selection(state: State<AppState>) -> Result<String, String> {
                 if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
                 "No LLM model found".to_string()
             })?;
-            match llm::Formatter::new(&model_path) {
+            let force_cpu = *state.force_cpu.lock().unwrap();
+            match llm::Formatter::new(&model_path, force_cpu) {
                 Ok(f) => {
+                    *state.llm_using_gpu.lock().unwrap() = Some(f.is_using_gpu());
                     *state.llm_status.lock().unwrap() = Some(true);
                     *guard = Some(f);
                 }
                 Err(e) => {
                     if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
+                    *state.llm_using_gpu.lock().unwrap() = Some(false);
                     *state.llm_status.lock().unwrap() = Some(false);
                     return Err(format!("{e}"));
                 }
@@ -1799,6 +1834,11 @@ fn enforce_single_instance() -> windows::Win32::Foundation::HANDLE {
 // ── App entry point ─────────────────────────────────────────────────────
 
 fn main() {
+    // Install the TLS crypto provider before anything else — both ring and
+    // aws-lc-rs features are activated by our dependency tree (ureq + axum-server),
+    // so rustls can't auto-detect which one to use.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let _mutex = enforce_single_instance();
     let model_path = model_manager::find_whisper_model();
     let transcriber: Arc<Mutex<Option<transcription::Transcriber>>> = Arc::new(Mutex::new(None));
@@ -1809,6 +1849,8 @@ fn main() {
     let auto_format_type: Arc<Mutex<String>> = Arc::new(Mutex::new("clean_up".into()));
     let connected_phones: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    let llm_using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    let force_cpu: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let selected_device: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     // Determine LAN IPs for fallback
@@ -1881,6 +1923,8 @@ fn main() {
             cert_type: Mutex::new("self-signed".to_string()),
             tailscale_url: Mutex::new(None),
             using_gpu: using_gpu.clone(),
+            llm_using_gpu: llm_using_gpu.clone(),
+            force_cpu: force_cpu.clone(),
             selected_device: selected_device.clone(),
             hotkey: Mutex::new("Ctrl+Shift+Space".into()),
             inject_hotkey: Mutex::new("none".into()),
@@ -1922,6 +1966,8 @@ fn main() {
             get_auto_format_type,
             set_auto_format_type,
             get_gpu_status,
+            get_force_cpu,
+            set_force_cpu,
             list_audio_devices,
             get_selected_device,
             set_selected_device,
@@ -1993,14 +2039,16 @@ fn main() {
         .setup(move |app| {
             let transcriber_handle = transcriber.clone();
             let gpu_handle = using_gpu.clone();
+            let force_cpu_handle = force_cpu.clone();
             let app_handle = app.handle().clone();
 
             // Load model in background (or signal no model available)
             if let Some(model_path) = model_path {
                 std::thread::spawn(move || {
+                    let fc = *force_cpu_handle.lock().unwrap();
                     eprintln!("Loading whisper model from: {}", model_path.display());
 
-                    match transcription::Transcriber::new(&model_path) {
+                    match transcription::Transcriber::new(&model_path, fc) {
                         Ok(t) => {
                             let gpu = t.is_using_gpu();
                             *gpu_handle.lock().unwrap() = Some(gpu);
@@ -2132,6 +2180,7 @@ fn main() {
                     auto_format: server_auto_format.clone(),
                     auto_format_type: server_auto_format_type.clone(),
                     using_gpu: server_gpu.clone(),
+                    force_cpu: force_cpu.clone(),
                     tts_trigger: tts_tx.clone(),
                 });
             }
@@ -2186,6 +2235,7 @@ fn main() {
                         auto_format_type: server_auto_format_type,
                         cert_type: "self-signed".to_string(),
                         using_gpu: server_gpu,
+                        force_cpu: force_cpu,
                         tts_trigger: Some(tts_tx),
                     });
                     server::run_server(

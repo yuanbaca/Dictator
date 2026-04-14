@@ -479,35 +479,20 @@
     </div>
 
     <p>
-      Dictator uses <strong>Whisper</strong> to convert your speech to text. By default
-      it runs on your CPU, which works fine. If you have a dedicated graphics card
-      (GPU), you can speed up transcription significantly.
+      Dictator automatically uses your GPU (via <strong>Vulkan</strong>) for both
+      speech-to-text and AI text formatting if a compatible graphics card is detected.
+      This works with NVIDIA, AMD, and Intel GPUs. If no GPU is available, it falls
+      back to CPU automatically &mdash; no configuration needed.
     </p>
-
-    <h3>How to Enable GPU</h3>
     <p>
-      GPU acceleration uses <strong>Vulkan</strong>, which works with NVIDIA, AMD, and
-      Intel GPUs. To build Dictator with GPU support:
+      <strong>Most users don't need to change anything.</strong> The base English model
+      is small and runs fast on modern CPUs. GPU acceleration shines if you notice a
+      delay between stopping your recording and seeing the text, or if you switch to a
+      larger model for better accuracy.
     </p>
-    <ol>
-      <li>
-        <strong>Install the Vulkan SDK</strong> from
-        <code>vulkan.lunarg.com</code> &mdash; run the installer and accept defaults
-      </li>
-      <li>
-        <strong>Rebuild Dictator</strong> using the GPU build command:<br>
-        <code>build-gpu.bat</code>
-      </li>
-      <li>
-        Dictator will automatically use your GPU if available, and fall back to
-        CPU if anything goes wrong
-      </li>
-    </ol>
     <p>
-      <strong>Most users don't need this.</strong> The base English model is small and
-      runs fast on modern CPUs. GPU acceleration shines if you notice a delay between
-      stopping your recording and seeing the text, or if you switch to a larger model
-      for better accuracy.
+      If you experience issues with GPU acceleration, you can disable it in the
+      desktop app under <strong>Settings &rarr; Force CPU mode</strong>.
     </p>
   </div>
 
@@ -537,8 +522,10 @@
         if (info.gpu === true) {
           gpuEl.innerHTML = '<p style="color:#4ecca3; margin:0;"><strong>GPU acceleration is active.</strong> Transcription is running on your graphics card.</p>';
           gpuEl.classList.add('green');
+        } else if (info.gpu === false && info.gpu_compiled) {
+          gpuEl.innerHTML = '<p style="color:#999; margin:0;"><strong>Running on CPU.</strong> No compatible GPU was detected. This is normal.</p>';
         } else if (info.gpu === false) {
-          gpuEl.innerHTML = '<p style="color:#999; margin:0;"><strong>Running on CPU.</strong> This is normal. See below if you want to enable GPU acceleration.</p>';
+          gpuEl.innerHTML = '<p style="color:#999; margin:0;"><strong>Running on CPU.</strong></p>';
         } else {
           gpuEl.innerHTML = '<p style="color:#888; margin:0;">Model is still loading. Refresh to check GPU status.</p>';
         }

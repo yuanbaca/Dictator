@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     // Step 2: Transcribe
     println!("[2/3] Transcribing...");
     let start = std::time::Instant::now();
-    let transcriber = transcription::Transcriber::new(&args.model)?;
+    let transcriber = transcription::Transcriber::new(&args.model, false)?;
     let model_load = start.elapsed();
 
     let start = std::time::Instant::now();

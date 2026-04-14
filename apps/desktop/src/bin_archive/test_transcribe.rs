@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     // Load model and transcribe
     println!("Loading whisper model...");
     let start = std::time::Instant::now();
-    let transcriber = transcription::Transcriber::new(&args.model)?;
+    let transcriber = transcription::Transcriber::new(&args.model, false)?;
     println!("Model loaded in {:?}", start.elapsed());
     println!();
 

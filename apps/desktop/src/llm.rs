@@ -25,11 +25,15 @@ pub struct Formatter {
     backend: LlamaBackend,
     model: LlamaModel,
     chat_format: ChatFormat,
+    using_gpu: bool,
 }
 
 impl Formatter {
     /// Load a GGUF model from the given path.
-    pub fn new(model_path: &Path) -> Result<Self, LlmError> {
+    ///
+    /// Tries GPU acceleration (Vulkan) by offloading all layers to GPU.
+    /// Falls back to CPU-only if GPU fails. Pass `force_cpu = true` to skip GPU.
+    pub fn new(model_path: &Path, force_cpu: bool) -> Result<Self, LlmError> {
         if !model_path.exists() {
             return Err(LlmError::ModelNotFound(model_path.to_path_buf()));
         }
@@ -39,10 +43,32 @@ impl Formatter {
         let backend =
             LlamaBackend::init().map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
 
-        let model_params = LlamaModelParams::default();
+        // Try GPU first (offload all layers) unless force_cpu
+        let (model, using_gpu) = if !force_cpu {
+            eprintln!("Attempting Vulkan GPU acceleration for LLM...");
+            let gpu_params = LlamaModelParams::default(); // n_gpu_layers defaults to -1 (all layers)
 
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
-            .map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
+            match LlamaModel::load_from_file(&backend, model_path, &gpu_params) {
+                Ok(m) => {
+                    eprintln!("LLM loaded with GPU layer offloading");
+                    (m, true)
+                }
+                Err(e) => {
+                    eprintln!("LLM GPU loading failed: {e}");
+                    eprintln!("Falling back to CPU-only for LLM...");
+                    let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
+                    let m = LlamaModel::load_from_file(&backend, model_path, &cpu_params)
+                        .map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
+                    (m, false)
+                }
+            }
+        } else {
+            eprintln!("Force CPU mode — skipping GPU for LLM");
+            let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
+            let m = LlamaModel::load_from_file(&backend, model_path, &cpu_params)
+                .map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
+            (m, false)
+        };
 
         let mut chat_format = ChatFormat::detect(&model_path.to_string_lossy());
         // Check for user override
@@ -57,13 +83,18 @@ impl Formatter {
                 }
             }
         }
-        eprintln!("LLM loaded successfully (chat format: {:?})", chat_format);
-        Ok(Self { backend, model, chat_format })
+        eprintln!("LLM loaded successfully (chat format: {:?}, {})", chat_format, if using_gpu { "GPU" } else { "CPU" });
+        Ok(Self { backend, model, chat_format, using_gpu })
     }
 
     /// The chat format this model is using (auto-detected or overridden).
     pub fn chat_format(&self) -> ChatFormat {
         self.chat_format
+    }
+
+    /// Whether the LLM is running with GPU layer offloading.
+    pub fn is_using_gpu(&self) -> bool {
+        self.using_gpu
     }
 
     /// Format raw dictated text using the given format type.

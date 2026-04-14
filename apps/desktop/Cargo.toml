@@ -9,8 +9,8 @@ name = "dictator"
 path = "src/lib.rs"
 
 [features]
-default = []
-gpu = ["whisper-rs/vulkan", "llama-cpp-2/vulkan"]  # Enables Vulkan GPU acceleration (needs Vulkan SDK to build)
+default = ["gpu"]
+gpu = ["whisper-rs/vulkan", "llama-cpp-2/vulkan"]  # Vulkan GPU acceleration (needs Vulkan SDK to build, runtime falls back to CPU)
 
 [dependencies]
 # Whisper.cpp Rust bindings for local transcription
@@ -60,6 +60,7 @@ futures-util = "0.3"
 
 # HTTPS for phone companion (iOS requires HTTPS for microphone access)
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = "0.13"
 
 # Text-to-speech (Windows SAPI)

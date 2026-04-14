@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     // Find the model
     let model_path = find_model()?;
     println!("Loading whisper model...");
-    let transcriber = transcription::Transcriber::new(&model_path)?;
+    let transcriber = transcription::Transcriber::new(&model_path, false)?;
     println!("Model loaded!");
     println!();
 

@@ -28,15 +28,14 @@ pub struct Transcriber {
 impl Transcriber {
     /// Load a whisper model from a .bin file.
     ///
-    /// If compiled with the `gpu` feature, tries GPU acceleration (Vulkan) first
-    /// and falls back to CPU if the GPU isn't available or fails to initialize.
-    pub fn new(model_path: &Path) -> Result<Self> {
+    /// Tries GPU acceleration (Vulkan) first and falls back to CPU if the GPU
+    /// isn't available or fails to initialize. Pass `force_cpu = true` to skip
+    /// the GPU attempt entirely.
+    pub fn new(model_path: &Path, force_cpu: bool) -> Result<Self> {
         let path_str = model_path.to_str().context("Invalid model path")?;
 
-        // Try GPU first if compiled with the gpu feature
-        #[cfg(feature = "gpu")]
-        {
-            eprintln!("GPU feature enabled \u{2014} attempting Vulkan GPU acceleration...");
+        if !force_cpu {
+            eprintln!("Attempting Vulkan GPU acceleration for Whisper...");
             let mut gpu_params = WhisperContextParameters::default();
             gpu_params.use_gpu(true);
 
@@ -49,18 +48,12 @@ impl Transcriber {
                     });
                 }
                 Err(e) => {
-                    eprintln!("GPU initialization failed: {e}");
+                    eprintln!("Whisper GPU initialization failed: {e}");
                     eprintln!("Falling back to CPU...");
                 }
             }
-        }
-
-        #[cfg(not(feature = "gpu"))]
-        {
-            eprintln!(
-                "GPU feature not enabled \u{2014} using CPU \
-                 (build with --features gpu for Vulkan acceleration)"
-            );
+        } else {
+            eprintln!("Force CPU mode — skipping GPU for Whisper");
         }
 
         // CPU fallback (always works)
@@ -80,11 +73,6 @@ impl Transcriber {
     /// Whether the model is running on GPU.
     pub fn is_using_gpu(&self) -> bool {
         self.using_gpu
-    }
-
-    /// Whether the binary was compiled with GPU support.
-    pub fn gpu_compiled() -> bool {
-        cfg!(feature = "gpu")
     }
 
     /// Transcribe audio samples.
