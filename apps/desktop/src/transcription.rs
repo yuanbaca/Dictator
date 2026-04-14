@@ -34,13 +34,22 @@ impl Transcriber {
     pub fn new(model_path: &Path, force_cpu: bool) -> Result<Self> {
         let path_str = model_path.to_str().context("Invalid model path")?;
 
-        if !force_cpu {
+        // Skip GPU if the user forced CPU OR if the guard detected a crash
+        // from a previous session (Vulkan may still be in a bad state).
+        let crash_skip = crate::gpu_guard::session_disabled();
+        let skip_gpu = force_cpu || crash_skip;
+
+        if !skip_gpu {
             eprintln!("Attempting Vulkan GPU acceleration for Whisper...");
+            crate::gpu_guard::arm();
             let mut gpu_params = WhisperContextParameters::default();
             gpu_params.use_gpu(true);
 
             match WhisperContext::new_with_params(path_str, gpu_params) {
                 Ok(ctx) => {
+                    // Leave the marker armed — only disarm on graceful shutdown.
+                    // A crash during inference will leave it in place, which is
+                    // what we want: next session will skip GPU and recover.
                     eprintln!("Whisper model loaded with GPU acceleration (Vulkan)");
                     return Ok(Self {
                         ctx,
@@ -48,10 +57,16 @@ impl Transcriber {
                     });
                 }
                 Err(e) => {
+                    // Soft failure: Rust got an Err back, meaning Vulkan is
+                    // reachable but something else went wrong (e.g. model too
+                    // big for VRAM). Disarm so the next session tries GPU fresh.
+                    crate::gpu_guard::disarm();
                     eprintln!("Whisper GPU initialization failed: {e}");
                     eprintln!("Falling back to CPU...");
                 }
             }
+        } else if crash_skip && !force_cpu {
+            eprintln!("Whisper: skipping GPU — previous session crashed (marker detected)");
         } else {
             eprintln!("Force CPU mode — skipping GPU for Whisper");
         }

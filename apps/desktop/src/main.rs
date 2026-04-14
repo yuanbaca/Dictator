@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use dictator::audio_capture;
+use dictator::gpu_guard;
 use dictator::injection::{self, InjectionMode};
 use dictator::llm;
 use dictator::model_manager;
@@ -319,6 +320,12 @@ fn get_gpu_status(state: State<AppState>) -> serde_json::Value {
         "whisper_gpu": whisper_gpu,
         "llm_gpu": llm_gpu,
         "force_cpu": force_cpu,
+        // True if this session started with a crash marker from a previous run.
+        // The UI uses this to show a "Try GPU Again" affordance.
+        "crash_recovered": gpu_guard::crash_recovered(),
+        // True if GPU is currently being skipped because of that crash marker.
+        // Cleared once the user clicks "Try GPU Again".
+        "gpu_crash_skipped": gpu_guard::session_disabled(),
         // Keep "active" for backward compat with companion page
         "active": whisper_gpu,
         "compiled": true,
@@ -335,6 +342,19 @@ fn set_force_cpu(state: State<AppState>, force: bool) {
     *state.force_cpu.lock().unwrap() = force;
     // Models will pick up the new setting on next load/reload.
     // Clear loaded models so they reload with the new GPU preference.
+    *state.transcriber.lock().unwrap() = None;
+    *state.formatter.lock().unwrap() = None;
+    *state.using_gpu.lock().unwrap() = None;
+    *state.llm_using_gpu.lock().unwrap() = None;
+    *state.llm_status.lock().unwrap() = None;
+}
+
+/// Let the user re-enable GPU after a crash-recovery skip. Clears the guard's
+/// session-disabled flag and unloads any loaded models so they'll reload with
+/// a GPU attempt on next use.
+#[tauri::command]
+fn retry_gpu(state: State<AppState>) {
+    gpu_guard::allow_gpu_retry();
     *state.transcriber.lock().unwrap() = None;
     *state.formatter.lock().unwrap() = None;
     *state.using_gpu.lock().unwrap() = None;
@@ -1839,6 +1859,11 @@ fn main() {
     // so rustls can't auto-detect which one to use.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // Check for a leftover GPU crash marker from the previous session. If found,
+    // GPU will be skipped this session and the UI will offer a "Try GPU Again"
+    // affordance. Must run before any GPU work is attempted.
+    gpu_guard::init();
+
     let _mutex = enforce_single_instance();
     let model_path = model_manager::find_whisper_model();
     let transcriber: Arc<Mutex<Option<transcription::Transcriber>>> = Arc::new(Mutex::new(None));
@@ -1968,6 +1993,7 @@ fn main() {
             get_gpu_status,
             get_force_cpu,
             set_force_cpu,
+            retry_gpu,
             list_audio_devices,
             get_selected_device,
             set_selected_device,
@@ -2353,6 +2379,9 @@ fn main() {
                             }
                         }
                         "quit" => {
+                            // Clear the GPU crash marker — we're exiting cleanly,
+                            // so next launch should be allowed to try GPU again.
+                            gpu_guard::disarm();
                             app.exit(0);
                         }
                         _ if id.starts_with("fmt_") => {

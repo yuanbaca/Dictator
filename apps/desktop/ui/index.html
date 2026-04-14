@@ -970,6 +970,18 @@
           Models will reload on CPU next time they're used
         </div>
 
+        <div id="gpuRecoveryRow" style="display:none; padding:10px 12px; margin:4px 0 12px; background:var(--bg-elev); border:1px solid var(--border); border-radius:6px;">
+          <div style="font-size:12px; color:var(--text); margin-bottom:6px;">
+            <strong>GPU disabled this session</strong>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px; line-height:1.4;">
+            The previous session didn't shut down cleanly — usually from a GPU driver
+            issue after sleep/resume. GPU has been skipped to keep things stable.
+            You can retry now, or restart the app to try GPU again automatically.
+          </div>
+          <button id="retryGpuBtn" style="font-size:12px; padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer;">Try GPU Again</button>
+        </div>
+
         <div class="setting-group">
           <label>Silence reminder</label>
           <select id="silenceReminderSelect">
@@ -3060,7 +3072,18 @@
     async function updateGpuStatus() {
       const gpu = await invoke('get_gpu_status');
       const gpuEl = document.getElementById('gpuStatus');
-      if (gpu.force_cpu) {
+
+      // Show/hide the "Try GPU Again" recovery row in Settings based on whether
+      // the guard is currently skipping GPU due to a previous crash.
+      const recoveryRow = document.getElementById('gpuRecoveryRow');
+      if (recoveryRow) {
+        recoveryRow.style.display = gpu.gpu_crash_skipped ? 'block' : 'none';
+      }
+
+      if (gpu.gpu_crash_skipped && !gpu.force_cpu) {
+        gpuEl.textContent = 'Running on CPU — GPU disabled after previous crash';
+        gpuEl.className = 'info-text muted';
+      } else if (gpu.force_cpu) {
         gpuEl.textContent = 'Running on CPU (forced)';
         gpuEl.className = 'info-text muted';
       } else if (gpu.whisper_gpu === true && gpu.llm_gpu === true) {
@@ -3085,6 +3108,22 @@
         gpuEl.textContent = 'Loading model...';
         gpuEl.className = 'info-text muted';
       }
+    }
+
+    // "Try GPU Again" — clears the crash-skip flag and unloads models so the
+    // next use will attempt GPU loading fresh.
+    const retryGpuBtn = document.getElementById('retryGpuBtn');
+    if (retryGpuBtn) {
+      retryGpuBtn.addEventListener('click', async () => {
+        retryGpuBtn.disabled = true;
+        retryGpuBtn.textContent = 'Retrying…';
+        try {
+          await invoke('retry_gpu');
+          await updateGpuStatus();
+        } catch (e) { /* ignore */ }
+        retryGpuBtn.disabled = false;
+        retryGpuBtn.textContent = 'Try GPU Again';
+      });
     }
 
     async function pollPhoneStatus() {

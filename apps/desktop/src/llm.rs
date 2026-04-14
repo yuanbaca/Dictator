@@ -43,17 +43,28 @@ impl Formatter {
         let backend =
             LlamaBackend::init().map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
 
-        // Try GPU first (offload all layers) unless force_cpu
-        let (model, using_gpu) = if !force_cpu {
+        // Skip GPU if the user forced CPU OR if the guard detected a crash
+        // from a previous session (Vulkan may still be in a bad state).
+        let crash_skip = crate::gpu_guard::session_disabled();
+        let skip_gpu = force_cpu || crash_skip;
+
+        let (model, using_gpu) = if !skip_gpu {
             eprintln!("Attempting Vulkan GPU acceleration for LLM...");
+            crate::gpu_guard::arm();
             let gpu_params = LlamaModelParams::default(); // n_gpu_layers defaults to -1 (all layers)
 
             match LlamaModel::load_from_file(&backend, model_path, &gpu_params) {
                 Ok(m) => {
+                    // Leave the marker armed — only disarm on graceful shutdown.
+                    // A crash during inference (e.g. after GPU sleep/resume)
+                    // will leave it in place; next session will skip GPU.
                     eprintln!("LLM loaded with GPU layer offloading");
                     (m, true)
                 }
                 Err(e) => {
+                    // Soft failure: Vulkan is reachable but couldn't fit the
+                    // model. Disarm so next session tries GPU again.
+                    crate::gpu_guard::disarm();
                     eprintln!("LLM GPU loading failed: {e}");
                     eprintln!("Falling back to CPU-only for LLM...");
                     let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
@@ -63,7 +74,11 @@ impl Formatter {
                 }
             }
         } else {
-            eprintln!("Force CPU mode — skipping GPU for LLM");
+            if crash_skip && !force_cpu {
+                eprintln!("LLM: skipping GPU — previous session crashed (marker detected)");
+            } else {
+                eprintln!("Force CPU mode — skipping GPU for LLM");
+            }
             let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
             let m = LlamaModel::load_from_file(&backend, model_path, &cpu_params)
                 .map_err(|e| LlmError::LoadFailed(format!("{e}")))?;

@@ -7,3 +7,4 @@ pub mod llm;
 pub mod model_manager;
 pub mod templates;
 pub mod tts;
+pub mod gpu_guard;
