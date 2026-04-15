@@ -324,6 +324,212 @@
       animation: pulse 0.8s infinite;
     }
 
+    /* ── History panel ──────────────────────────────────────────────── */
+    /* Sits directly below Insert/Clear. Collapsed by default; expanded
+       body caps at ~260px so the window can still show the info-bar
+       without forcing users to resize. Widths mirror the other main-area
+       elements (max 360px) so it stays visually aligned. */
+    .history-panel {
+      width: 100%;
+      max-width: 360px;
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-card);
+      overflow: hidden;
+    }
+
+    .history-toggle {
+      width: 100%;
+      padding: 8px 12px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 500;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .history-toggle:hover { background: var(--bg-elev); }
+
+    .history-toggle-count {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .history-toggle-chevron {
+      transition: transform 0.2s;
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+
+    .history-panel.open .history-toggle-chevron {
+      transform: rotate(180deg);
+    }
+
+    .history-body,
+    .history-footer {
+      display: none;
+    }
+
+    .history-panel.open .history-body {
+      display: block;
+      border-top: 1px solid var(--border);
+      max-height: 260px;
+      overflow-y: auto;
+    }
+
+    .history-panel.open .history-footer {
+      display: block;
+      padding: 6px 12px;
+      text-align: right;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    .history-entry {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+
+    .history-entry:last-child { border-bottom: none; }
+
+    .history-entry-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-bottom: 3px;
+    }
+
+    .history-entry-meta {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .history-entry-fmt-badge {
+      font-size: 9px;
+      padding: 1px 5px;
+      background: var(--accent-glow);
+      color: var(--accent);
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+
+    .history-entry-delete {
+      padding: 0 6px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      opacity: 0.5;
+    }
+
+    .history-entry-delete:hover {
+      opacity: 1;
+      color: var(--danger);
+    }
+
+    .history-entry-text {
+      color: var(--text);
+      line-height: 1.4;
+      word-wrap: break-word;
+      cursor: pointer;
+    }
+
+    .history-entry-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+
+    .history-entry-btn {
+      padding: 3px 8px;
+      font-size: 10px;
+      background: var(--bg-elev);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .history-entry-btn:hover:not(:disabled) {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .history-entry-btn.countdown {
+      animation: countdown-pulse 1s infinite;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .history-entry-btn.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .history-entry-details {
+      display: none;
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: var(--bg);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      word-wrap: break-word;
+    }
+
+    .history-entry.expanded .history-entry-details { display: block; }
+
+    .history-entry-detail-label {
+      color: var(--text-dim);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+
+    .history-entry-raw {
+      font-family: var(--font-mono, monospace);
+      white-space: pre-wrap;
+    }
+
+    .history-clear-all {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      padding: 2px 4px;
+    }
+
+    .history-clear-all:hover { color: var(--danger); }
+
+    .history-empty {
+      padding: 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-style: italic;
+    }
+
     .hint-msg {
       background: var(--accent-glow);
       border: 1px solid var(--accent-glow);
@@ -790,6 +996,21 @@
       <button class="action-btn btn-clear" id="clearBtn" disabled>
         Clear
       </button>
+    </div>
+
+    <!-- Transcription history. Collapsed by default; state remembered in
+         localStorage. Each entry shows final text + relative timestamp;
+         clicking reveals the raw pre-word-bank Whisper output so the user
+         can spot recurring mishears worth adding to the word bank. -->
+    <div class="history-panel" id="historyPanel">
+      <button class="history-toggle" id="historyToggle" type="button">
+        <span>History <span class="history-toggle-count" id="historyCount">(0)</span></span>
+        <span class="history-toggle-chevron" id="historyChevron">&#x25BC;</span>
+      </button>
+      <div class="history-body" id="historyBody"></div>
+      <div class="history-footer" id="historyFooter">
+        <button class="history-clear-all" id="historyClearAll" type="button">Clear all</button>
+      </div>
     </div>
   </div>
 
@@ -1943,10 +2164,18 @@
         startAnimatedProgress(recDurationSec);
 
         try {
-          let text = await invoke('stop_and_transcribe');
+          // stop_and_transcribe now returns { text, raw } — text is the
+          // post-word-bank output we use for display/inject/format; raw
+          // is the true pre-word-bank Whisper output, kept so the history
+          // panel can show what Whisper actually heard (useful for
+          // discovering new word-bank entries).
+          const transcribeResult = await invoke('stop_and_transcribe');
+          const whisperRaw = transcribeResult.raw;
+          let text = transcribeResult.text;
           rawText = text;
 
           // Auto-format with LLM if enabled
+          let usedFormat = 'none';
           if (autoFormatEnabled) {
             soundLlmStart();
             micHint.textContent = 'Formatting with AI...';
@@ -1957,6 +2186,7 @@
                 text: rawText,
                 format: autoFormatType.value,
               });
+              usedFormat = autoFormatType.value;
             } catch (e) {
               resetProgress();
               soundError();
@@ -1977,6 +2207,10 @@
           clearBtn.disabled = false;
           formatBtn.disabled = formatSelect.value === 'none';
           setStatus('ready', 'Ready');
+
+          // Record to history. Fire-and-forget: a failure to persist
+          // should never block the core dictation flow.
+          recordHistoryEntry(whisperRaw, text, usedFormat);
 
           // Auto-inject when triggered by hotkey (user is already in target app)
           if (hotkeyTriggered) {
@@ -2339,6 +2573,272 @@
         if (firstInput) firstInput.focus();
       }
     });
+
+    // ── Transcription history panel ─────────────────────────────────────
+    // Persistent, one entry per completed dictation. Collapsed/open state
+    // lives in localStorage so the panel's visibility survives restarts.
+    // Rendering is driven from `historyEntries` (mirror of backend). Any
+    // mutation (append/delete/clear) re-fetches and re-renders — simpler
+    // than maintaining two sources of truth, and the list is small.
+    let historyEntries = [];
+    const historyPanel = document.getElementById('historyPanel');
+    const historyToggle = document.getElementById('historyToggle');
+    const historyBody = document.getElementById('historyBody');
+    const historyCount = document.getElementById('historyCount');
+    const historyClearAll = document.getElementById('historyClearAll');
+
+    // Open/close. Stored as 'open' | 'closed' (default 'closed').
+    function applyHistoryOpenState() {
+      const saved = localStorage.getItem('dictator-history-open') === 'open';
+      historyPanel.classList.toggle('open', saved);
+    }
+    historyToggle.addEventListener('click', () => {
+      const nowOpen = !historyPanel.classList.contains('open');
+      historyPanel.classList.toggle('open', nowOpen);
+      localStorage.setItem('dictator-history-open', nowOpen ? 'open' : 'closed');
+    });
+
+    // Format a timestamp (ms since epoch) as a short relative string.
+    // Under an hour: "Xm ago" or "just now". Same day: "HH:MM". Older:
+    // "MMM D" (e.g. "Apr 14"). Kept terse because the row has tight space.
+    function formatRelativeTime(ms) {
+      const now = Date.now();
+      const delta = Math.max(0, now - ms);
+      const sec = Math.floor(delta / 1000);
+      if (sec < 30) return 'just now';
+      if (sec < 60) return sec + 's ago';
+      const min = Math.floor(sec / 60);
+      if (min < 60) return min + 'm ago';
+      const d = new Date(ms);
+      const today = new Date();
+      const sameDay = d.getFullYear() === today.getFullYear()
+        && d.getMonth() === today.getMonth()
+        && d.getDate() === today.getDate();
+      if (sameDay) {
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+
+    // Humanize the internal format-type string. "clean_up" → "Clean up".
+    function formatLabel(fmt) {
+      if (!fmt || fmt === 'none') return '';
+      return fmt.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function renderHistory() {
+      historyCount.textContent = '(' + historyEntries.length + ')';
+      historyBody.innerHTML = '';
+
+      if (historyEntries.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'history-empty';
+        empty.textContent = 'No dictations yet.';
+        historyBody.appendChild(empty);
+        return;
+      }
+
+      historyEntries.forEach(entry => {
+        const row = document.createElement('div');
+        row.className = 'history-entry';
+        // Auto-expand any entry that went through an LLM format — the raw
+        // Whisper output is almost always worth seeing in that case (users
+        // wanting to verify the AI didn't stray, or to catch word-bank
+        // candidates). Plain dictation (no format) stays compact so the
+        // panel doesn't get wall-of-text-y.
+        if (entry.format_type && entry.format_type !== 'none') {
+          row.classList.add('expanded');
+        }
+        row.dataset.id = entry.id;
+
+        // ── Header: timestamp + format badge + delete ──────────────────
+        const header = document.createElement('div');
+        header.className = 'history-entry-header';
+
+        const meta = document.createElement('div');
+        meta.className = 'history-entry-meta';
+        const ts = document.createElement('span');
+        ts.textContent = formatRelativeTime(entry.timestamp);
+        meta.appendChild(ts);
+        const fmtLabel = formatLabel(entry.format_type);
+        if (fmtLabel) {
+          const badge = document.createElement('span');
+          badge.className = 'history-entry-fmt-badge';
+          badge.textContent = fmtLabel;
+          meta.appendChild(badge);
+        }
+        header.appendChild(meta);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'history-entry-delete';
+        delBtn.title = 'Remove this entry';
+        delBtn.textContent = '\u00D7'; // ×
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await invoke('delete_history_entry', { id: entry.id });
+            await refreshHistory();
+          } catch (err) {
+            console.error('delete_history_entry failed:', err);
+          }
+        });
+        header.appendChild(delBtn);
+        row.appendChild(header);
+
+        // ── Main text (click to expand / collapse detail block) ────────
+        const textEl = document.createElement('div');
+        textEl.className = 'history-entry-text';
+        textEl.textContent = entry.final_text || entry.raw;
+        textEl.title = 'Click to show raw Whisper output';
+        textEl.addEventListener('click', () => {
+          row.classList.toggle('expanded');
+        });
+        row.appendChild(textEl);
+
+        // ── Actions row: copy + insert w/ countdown ────────────────────
+        const actions = document.createElement('div');
+        actions.className = 'history-entry-actions';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'history-entry-btn';
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(entry.final_text || entry.raw);
+            copyBtn.classList.add('copied');
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => {
+              copyBtn.classList.remove('copied');
+              copyBtn.textContent = 'Copy';
+            }, 1500);
+          } catch (err) {
+            console.error('clipboard write failed:', err);
+          }
+        });
+        actions.appendChild(copyBtn);
+
+        const insertBtn = document.createElement('button');
+        insertBtn.className = 'history-entry-btn';
+        insertBtn.textContent = 'Insert';
+        insertBtn.dataset.state = 'idle';
+        insertBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          // Cancel mid-countdown if already running
+          if (insertBtn.dataset.state === 'countdown') {
+            insertBtn.dataset.state = 'cancel';
+            return;
+          }
+          insertBtn.dataset.state = 'countdown';
+          insertBtn.classList.add('countdown');
+          const countdownSec = 3;
+          for (let i = countdownSec; i > 0; i--) {
+            if (insertBtn.dataset.state === 'cancel') {
+              insertBtn.textContent = 'Insert';
+              insertBtn.classList.remove('countdown');
+              insertBtn.dataset.state = 'idle';
+              return;
+            }
+            insertBtn.textContent = 'Click target! ' + i + 's';
+            await new Promise(r => setTimeout(r, 1000));
+          }
+          insertBtn.textContent = 'Inserting...';
+          try {
+            await invoke('inject_text', { text: entry.final_text || entry.raw });
+            insertBtn.textContent = 'Inserted!';
+            setTimeout(() => {
+              insertBtn.textContent = 'Insert';
+              insertBtn.classList.remove('countdown');
+              insertBtn.dataset.state = 'idle';
+            }, 1500);
+          } catch (err) {
+            insertBtn.textContent = 'Failed';
+            insertBtn.classList.remove('countdown');
+            insertBtn.dataset.state = 'idle';
+            console.error('inject_text failed:', err);
+            setTimeout(() => { insertBtn.textContent = 'Insert'; }, 1500);
+          }
+        });
+        actions.appendChild(insertBtn);
+
+        row.appendChild(actions);
+
+        // ── Expandable details: raw Whisper + format info ──────────────
+        const details = document.createElement('div');
+        details.className = 'history-entry-details';
+
+        const rawLabel = document.createElement('div');
+        rawLabel.className = 'history-entry-detail-label';
+        rawLabel.textContent = 'Whisper heard';
+        details.appendChild(rawLabel);
+
+        const rawText = document.createElement('div');
+        rawText.className = 'history-entry-raw';
+        rawText.textContent = entry.raw;
+        details.appendChild(rawText);
+
+        // Only show a "differs" hint when raw ≠ final (word bank fired or
+        // LLM formatted). Otherwise the detail block only duplicates the
+        // main text, which helps no one.
+        if (entry.raw !== entry.final_text) {
+          const diffNote = document.createElement('div');
+          diffNote.style.cssText = 'font-size:10px; color:var(--text-muted); margin-top:4px; font-style:italic;';
+          const what = entry.format_type && entry.format_type !== 'none'
+            ? 'word bank and/or AI format rewrote this'
+            : 'word bank rewrote this';
+          diffNote.textContent = '— ' + what;
+          details.appendChild(diffNote);
+        }
+
+        row.appendChild(details);
+        historyBody.appendChild(row);
+      });
+    }
+
+    async function refreshHistory() {
+      try {
+        historyEntries = await invoke('get_history') || [];
+      } catch (err) {
+        console.error('get_history failed:', err);
+        historyEntries = [];
+      }
+      renderHistory();
+    }
+
+    // Called by the dictation pipeline once the transcript + final text
+    // are both known. Fire-and-forget — a failure to log should never
+    // interrupt the core flow.
+    async function recordHistoryEntry(rawWhisper, finalText, formatType) {
+      if (!rawWhisper || !rawWhisper.trim()) return;
+      try {
+        await invoke('add_history_entry', {
+          raw: rawWhisper,
+          finalText: finalText || rawWhisper,
+          formatType: formatType || 'none',
+        });
+        await refreshHistory();
+      } catch (err) {
+        console.error('add_history_entry failed:', err);
+      }
+    }
+
+    historyClearAll.addEventListener('click', async () => {
+      if (historyEntries.length === 0) return;
+      // Confirm via native-feeling prompt. The entries are persistent and
+      // potentially sensitive (someone's dictation) — don't wipe silently.
+      if (!confirm('Clear all ' + historyEntries.length + ' history entries? This cannot be undone.')) {
+        return;
+      }
+      try {
+        await invoke('clear_history');
+        await refreshHistory();
+      } catch (err) {
+        console.error('clear_history failed:', err);
+      }
+    });
+
+    applyHistoryOpenState();
+    refreshHistory();
 
     // ── Custom hotkey capture helper ────────────────────────────────────
     function captureKeyCombo(inputEl, callback) {

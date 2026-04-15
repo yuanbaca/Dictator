@@ -11,6 +11,7 @@ use dictator::power_events;
 use dictator::server;
 use dictator::tailscale;
 use dictator::templates::{ChatFormat, FormatType};
+use dictator::history;
 use dictator::transcription;
 use dictator::tts;
 use dictator::word_bank;
@@ -407,6 +408,38 @@ fn set_word_bank(entries: Vec<word_bank::Entry>) -> Result<(), String> {
     word_bank::save(&cleaned)
 }
 
+// ── History (persistent transcription log) ──────────────────────────────
+// The frontend calls add_history_entry at the end of each successful
+// dictation flow, once it knows both the raw Whisper output (returned
+// from stop_and_transcribe) and the final text (same as raw if no
+// format was applied, otherwise the LLM-formatted result). Keeping this
+// frontend-driven means we don't need to plumb format results back
+// through the backend — the frontend already has everything.
+
+#[tauri::command]
+fn get_history() -> Vec<history::Entry> {
+    history::load()
+}
+
+#[tauri::command]
+fn add_history_entry(
+    raw: String,
+    final_text: String,
+    format_type: String,
+) -> Result<(), String> {
+    history::append(&raw, &final_text, &format_type).map(|_| ())
+}
+
+#[tauri::command]
+fn delete_history_entry(id: u64) -> Result<(), String> {
+    history::delete(id)
+}
+
+#[tauri::command]
+fn clear_history() -> Result<(), String> {
+    history::clear()
+}
+
 /// Let the user re-enable GPU after a crash-recovery skip. Clears the guard's
 /// session-disabled flag, unloads any loaded models, and kicks off a background
 /// warm-up of the whisper model so the UI gets immediate feedback that GPU is
@@ -500,7 +533,7 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<String, String> {
+fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> Result<TranscriptionResult, String> {
     let session = {
         let mut guard = state.recording.lock().unwrap();
         guard.take().ok_or("Not recording")?
@@ -565,17 +598,37 @@ fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> 
         return Err("hint:No speech detected".into());
     }
 
+    // Capture the true raw Whisper output BEFORE word-bank substitution.
+    // The history panel exposes this so users can spot recurring mishears
+    // to add to the word bank ("Whisper keeps hearing 'clod' — let me add
+    // that rule"). Once word bank replaces "clod" with "Claude", the raw
+    // evidence disappears unless we preserve it here.
+    let raw_whisper = result.text.clone();
+
     // Apply the user's word-replacement bank before any downstream consumer
     // (LLM formatter, direct inject, auto-format). This is the single choke
     // point for Whisper output — doing it here means every flow benefits
     // without needing to remember it at each call site. Loaded fresh each
     // time so edits in Settings take effect immediately with no reload.
     let corrected = word_bank::apply(&result.text, &word_bank::load());
-    if corrected != result.text {
+    if corrected != raw_whisper {
         eprintln!("word_bank: rewrote Whisper output");
     }
 
-    Ok(corrected)
+    Ok(TranscriptionResult {
+        text: corrected,
+        raw: raw_whisper,
+    })
+}
+
+/// Return type for `stop_and_transcribe`. `text` is the post-word-bank
+/// output the UI uses for display / inject / format; `raw` is the true
+/// pre-word-bank Whisper output, exposed to the history panel so users
+/// can review what Whisper actually heard.
+#[derive(serde::Serialize)]
+struct TranscriptionResult {
+    text: String,
+    raw: String,
 }
 
 #[tauri::command]
@@ -2146,6 +2199,10 @@ fn main() {
             set_force_cpu,
             get_word_bank,
             set_word_bank,
+            get_history,
+            add_history_entry,
+            delete_history_entry,
+            clear_history,
             retry_gpu,
             list_audio_devices,
             get_selected_device,
