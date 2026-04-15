@@ -351,16 +351,58 @@ fn set_force_cpu(state: State<AppState>, force: bool) {
 }
 
 /// Let the user re-enable GPU after a crash-recovery skip. Clears the guard's
-/// session-disabled flag and unloads any loaded models so they'll reload with
-/// a GPU attempt on next use.
+/// session-disabled flag, unloads any loaded models, and kicks off a background
+/// warm-up of the whisper model so the UI gets immediate feedback that GPU is
+/// coming back online. Without the warm-up, the status row would stay in
+/// "Loading..." limbo until the user's next dictation triggers the lazy reload.
+///
+/// The LLM is intentionally left to lazy-load on first format — warming it up
+/// here would serialize two heavy loads and make the click feel slow.
 #[tauri::command]
-fn retry_gpu(state: State<AppState>) {
+fn retry_gpu(app_handle: tauri::AppHandle, state: State<AppState>) {
     gpu_guard::allow_gpu_retry();
     *state.transcriber.lock().unwrap() = None;
     *state.formatter.lock().unwrap() = None;
     *state.using_gpu.lock().unwrap() = None;
     *state.llm_using_gpu.lock().unwrap() = None;
     *state.llm_status.lock().unwrap() = None;
+
+    // Background warm-up — reload the whisper model now so the UI's
+    // "Loading model..." actually corresponds to something loading.
+    let transcriber = state.transcriber.clone();
+    let using_gpu = state.using_gpu.clone();
+    let force_cpu = state.force_cpu.clone();
+    let handle = app_handle.clone();
+    std::thread::spawn(move || {
+        let model_path = match model_manager::find_whisper_model() {
+            Some(p) => p,
+            None => {
+                eprintln!("retry_gpu warm-up: no whisper model found");
+                return;
+            }
+        };
+        let fc = *force_cpu.lock().unwrap();
+        eprintln!(
+            "retry_gpu warm-up: reloading whisper model from {}",
+            model_path.display()
+        );
+        match transcription::Transcriber::new(&model_path, fc) {
+            Ok(t) => {
+                *using_gpu.lock().unwrap() = Some(t.is_using_gpu());
+                *transcriber.lock().unwrap() = Some(t);
+                let _ = handle.emit("model-ready", "ok");
+            }
+            Err(e) => {
+                // Soft failure — stay on CPU. Intentionally do NOT emit
+                // `model-ready` with an error payload: the UI's existing
+                // listener would surface it as a generic error toast. The
+                // frontend's status poll will pick up Some(false) and settle
+                // on "Running on CPU" within a second.
+                eprintln!("retry_gpu warm-up: failed to load model: {e}");
+                *using_gpu.lock().unwrap() = Some(false);
+            }
+        }
+    });
 }
 
 #[tauri::command]

@@ -3110,8 +3110,12 @@
       }
     }
 
-    // "Try GPU Again" — clears the crash-skip flag and unloads models so the
-    // next use will attempt GPU loading fresh.
+    // "Try GPU Again" — clears the crash-skip flag, unloads models, and kicks
+    // off a background whisper warm-up in Rust. We poll get_gpu_status until
+    // the warm-up finishes (whisper_gpu transitions from null → true/false)
+    // so the button stays in its "Retrying…" state while something is actually
+    // loading, instead of snapping back immediately and leaving the user to
+    // guess whether it worked.
     const retryGpuBtn = document.getElementById('retryGpuBtn');
     if (retryGpuBtn) {
       retryGpuBtn.addEventListener('click', async () => {
@@ -3119,6 +3123,20 @@
         retryGpuBtn.textContent = 'Retrying…';
         try {
           await invoke('retry_gpu');
+          // Show the interim "Loading..." state right away.
+          await updateGpuStatus();
+          // Poll for warm-up completion — up to 30s, which covers first-load
+          // times on slower GPUs. Early-exit the moment whisper_gpu is set.
+          const deadline = Date.now() + 30000;
+          while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 500));
+            try {
+              const gs = await invoke('get_gpu_status');
+              if (gs && gs.whisper_gpu !== null && gs.whisper_gpu !== undefined) {
+                break;
+              }
+            } catch (_) { /* keep polling */ }
+          }
           await updateGpuStatus();
         } catch (e) { /* ignore */ }
         retryGpuBtn.disabled = false;
