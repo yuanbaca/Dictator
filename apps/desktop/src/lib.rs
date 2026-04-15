@@ -5,6 +5,7 @@ pub mod server;
 pub mod tailscale;
 pub mod llm;
 pub mod model_manager;
+pub mod word_bank;
 pub mod templates;
 pub mod tts;
 pub mod gpu_guard;

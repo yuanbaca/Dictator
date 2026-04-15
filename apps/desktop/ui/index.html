@@ -1129,6 +1129,19 @@
           </details>
         </div>
 
+        <!-- Word-replacement bank. Applied after Whisper output, before LLM
+             formatting / inject. Each row is a {from, to} pair — whole-word
+             case-insensitive. Fixes persistent Whisper mishears (proper
+             nouns, brand names). Rows with blank From are dropped on save. -->
+        <div class="setting-group">
+          <label>Word replacements</label>
+          <div style="font-size:11px; color:var(--text-muted); margin:-4px 0 8px; line-height:1.4;">
+            Fix words Whisper gets wrong — e.g. "clod" → "Claude". Case-insensitive whole-word match, applied after transcription.
+          </div>
+          <div id="wordBankList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
+          <button id="wordBankAdd" style="font-size:12px; padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer;">+ Add replacement</button>
+        </div>
+
         <div class="setting-group">
           <label>Insertion mode</label>
           <select id="injectionMode">
@@ -2248,6 +2261,85 @@
       await invoke('set_auto_space', { enabled: isOn });
     });
 
+    // ── Word replacement bank ───────────────────────────────────────────
+    // In-memory mirror of the backend word_bank.json. The DOM is rebuilt
+    // from this array on every change so indexes stay stable across ops.
+    // We save on blur of either field (not every keystroke) to avoid
+    // hammering the disk while the user is mid-word.
+    let wordBankEntries = [];
+    const wordBankList = document.getElementById('wordBankList');
+    const wordBankAdd = document.getElementById('wordBankAdd');
+
+    function renderWordBank() {
+      wordBankList.innerHTML = '';
+      if (wordBankEntries.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:11px; color:var(--text-muted); font-style:italic; padding:4px 0;';
+        empty.textContent = 'No replacements yet. Click "Add replacement" to start.';
+        wordBankList.appendChild(empty);
+        return;
+      }
+      wordBankEntries.forEach((entry, idx) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; gap:6px; align-items:center;';
+
+        const fromInput = document.createElement('input');
+        fromInput.type = 'text';
+        fromInput.value = entry.from;
+        fromInput.placeholder = 'heard';
+        fromInput.style.cssText = 'flex:1; padding:5px 8px; border:1px solid var(--border); border-radius:4px; background:var(--surface, rgba(255,255,255,0.04)); color:var(--text); font-size:12px; box-sizing:border-box;';
+        fromInput.addEventListener('input', () => { wordBankEntries[idx].from = fromInput.value; });
+        fromInput.addEventListener('blur', saveWordBank);
+
+        const arrow = document.createElement('span');
+        arrow.textContent = '→';
+        arrow.style.cssText = 'color:var(--text-muted); font-size:12px;';
+
+        const toInput = document.createElement('input');
+        toInput.type = 'text';
+        toInput.value = entry.to;
+        toInput.placeholder = 'correct';
+        toInput.style.cssText = 'flex:1; padding:5px 8px; border:1px solid var(--border); border-radius:4px; background:var(--surface, rgba(255,255,255,0.04)); color:var(--text); font-size:12px; box-sizing:border-box;';
+        toInput.addEventListener('input', () => { wordBankEntries[idx].to = toInput.value; });
+        toInput.addEventListener('blur', saveWordBank);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '×';
+        delBtn.title = 'Remove';
+        delBtn.style.cssText = 'width:24px; height:26px; padding:0; border:1px solid var(--border); border-radius:4px; background:var(--bg-elev); color:var(--text-muted); font-size:16px; line-height:1; cursor:pointer;';
+        delBtn.addEventListener('click', () => {
+          wordBankEntries.splice(idx, 1);
+          renderWordBank();
+          saveWordBank();
+        });
+
+        row.appendChild(fromInput);
+        row.appendChild(arrow);
+        row.appendChild(toInput);
+        row.appendChild(delBtn);
+        wordBankList.appendChild(row);
+      });
+    }
+
+    async function saveWordBank() {
+      try {
+        await invoke('set_word_bank', { entries: wordBankEntries });
+      } catch (e) {
+        console.error('set_word_bank failed:', e);
+      }
+    }
+
+    wordBankAdd.addEventListener('click', () => {
+      wordBankEntries.push({ from: '', to: '' });
+      renderWordBank();
+      // Focus the newly-added From input so the user can start typing.
+      const lastRow = wordBankList.lastElementChild;
+      if (lastRow && lastRow.querySelector) {
+        const firstInput = lastRow.querySelector('input');
+        if (firstInput) firstInput.focus();
+      }
+    });
+
     // ── Custom hotkey capture helper ────────────────────────────────────
     function captureKeyCombo(inputEl, callback) {
       inputEl.value = '';
@@ -3166,6 +3258,17 @@
           autoSpaceToggle.classList.remove('on');
         }
       } catch (e) { /* ignore */ }
+
+      // Word bank — load from disk and paint the list. A fresh user with
+      // no saved bank gets the "No replacements yet" placeholder.
+      try {
+        wordBankEntries = await invoke('get_word_bank') || [];
+        renderWordBank();
+      } catch (e) {
+        console.error('get_word_bank failed:', e);
+        wordBankEntries = [];
+        renderWordBank();
+      }
 
       // Sync auto-format state from localStorage to backend AND tray
       try {

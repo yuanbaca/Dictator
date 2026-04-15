@@ -1163,6 +1163,7 @@ dependencies = [
  "llama-cpp-2",
  "notify-rust",
  "rcgen",
+ "regex",
  "reqwest 0.12.28",
  "rodio",
  "rustls",

@@ -13,6 +13,7 @@ use dictator::tailscale;
 use dictator::templates::{ChatFormat, FormatType};
 use dictator::transcription;
 use dictator::tts;
+use dictator::word_bank;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -381,6 +382,31 @@ fn set_force_cpu(state: State<AppState>, force: bool) {
     *state.llm_status.lock().unwrap() = None;
 }
 
+// ── Word bank (Whisper replacement dictionary) ──────────────────────────
+// Loaded from / saved to disk on each call. The bank is tiny (dozens of
+// entries at most) and edits happen in Settings, so there's no need to
+// cache it in AppState — reading the JSON file costs nothing relative to
+// a transcription run.
+
+#[tauri::command]
+fn get_word_bank() -> Vec<word_bank::Entry> {
+    word_bank::load()
+}
+
+#[tauri::command]
+fn set_word_bank(entries: Vec<word_bank::Entry>) -> Result<(), String> {
+    // Trim whitespace on both sides so UI blank-row artifacts don't persist.
+    let cleaned: Vec<word_bank::Entry> = entries
+        .into_iter()
+        .map(|e| word_bank::Entry {
+            from: e.from.trim().to_string(),
+            to: e.to.trim().to_string(),
+        })
+        .filter(|e| !e.from.is_empty()) // drop fully-blank rows
+        .collect();
+    word_bank::save(&cleaned)
+}
+
 /// Let the user re-enable GPU after a crash-recovery skip. Clears the guard's
 /// session-disabled flag, unloads any loaded models, and kicks off a background
 /// warm-up of the whisper model so the UI gets immediate feedback that GPU is
@@ -539,7 +565,17 @@ fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> 
         return Err("hint:No speech detected".into());
     }
 
-    Ok(result.text)
+    // Apply the user's word-replacement bank before any downstream consumer
+    // (LLM formatter, direct inject, auto-format). This is the single choke
+    // point for Whisper output — doing it here means every flow benefits
+    // without needing to remember it at each call site. Loaded fresh each
+    // time so edits in Settings take effect immediately with no reload.
+    let corrected = word_bank::apply(&result.text, &word_bank::load());
+    if corrected != result.text {
+        eprintln!("word_bank: rewrote Whisper output");
+    }
+
+    Ok(corrected)
 }
 
 #[tauri::command]
@@ -2108,6 +2144,8 @@ fn main() {
             get_gpu_status,
             get_force_cpu,
             set_force_cpu,
+            get_word_bank,
+            set_word_bank,
             retry_gpu,
             list_audio_devices,
             get_selected_device,
