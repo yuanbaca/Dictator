@@ -2391,6 +2391,13 @@ fn main() {
             let cancel_rec_item = tauri::menu::MenuItem::with_id(
                 app, "cancel_recording", "Cancel Recording", true, None::<&str>,
             )?;
+            // Free GPU toggle — mirrors the main-screen toggle and Settings
+            // "Force CPU mode" setting. Label is updated dynamically to show
+            // the current state ("Free GPU: On" / "Free GPU: Off").
+            let sep_gpu = PredefinedMenuItem::separator(app)?;
+            let free_gpu_item = tauri::menu::MenuItem::with_id(
+                app, "free_gpu", "Free GPU: Off", true, None::<&str>,
+            )?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let show_item = tauri::menu::MenuItem::with_id(app, "show", "Show Dictator", true, None::<&str>)?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -2400,6 +2407,8 @@ fn main() {
                 &autoformat_item,
                 &cleanup_sub, &email_sub,
                 &fmt_letter, &fmt_bullet, &fmt_notes, &fmt_docs, &fmt_msg,
+                &sep_gpu,
+                &free_gpu_item,
                 &sep2,
                 &show_item,
                 &quit_item,
@@ -2418,6 +2427,10 @@ fn main() {
             let fmt_notes2 = fmt_notes.clone();
             let fmt_docs2 = fmt_docs.clone();
             let fmt_msg2 = fmt_msg.clone();
+            // free_gpu: one clone used inside on_menu_event, another inside the
+            // sync listener so the menu label reflects UI-initiated changes.
+            let free_gpu_item2 = free_gpu_item.clone();
+            let free_gpu_item3 = free_gpu_item.clone();
 
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("Missing app icon").clone())
@@ -2467,6 +2480,34 @@ fn main() {
                             // so next launch should be allowed to try GPU again.
                             gpu_guard::disarm();
                             app.exit(0);
+                        }
+                        "free_gpu" => {
+                            // Toggle Force CPU mode from the tray. Mirrors the
+                            // main-screen "Free GPU" toggle and Settings "Force
+                            // CPU mode" — they all read/write the same state.
+                            let state: State<AppState> = app.state();
+                            let new_state = {
+                                let mut fc = state.force_cpu.lock().unwrap();
+                                *fc = !*fc;
+                                *fc
+                            };
+                            // Drop loaded models so the new preference takes
+                            // effect on next use (VRAM is reclaimed for games
+                            // immediately when toggling ON).
+                            *state.transcriber.lock().unwrap() = None;
+                            *state.formatter.lock().unwrap() = None;
+                            *state.using_gpu.lock().unwrap() = None;
+                            *state.llm_using_gpu.lock().unwrap() = None;
+                            *state.llm_status.lock().unwrap() = None;
+
+                            let label = if new_state { "Free GPU: On" } else { "Free GPU: Off" };
+                            let _ = free_gpu_item2.set_text(label);
+
+                            // Tell the UI so its toggles, localStorage, and
+                            // status row stay in sync.
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.emit("freegpu-changed", new_state);
+                            }
                         }
                         _ if id.starts_with("fmt_") => {
                             // Format type selected — check model first
@@ -2574,16 +2615,34 @@ fn main() {
                     let _ = autoformat_item3.set_text(label);
                 });
 
-                // Dynamic "Cancel Recording" — insert/remove based on recording state
+                // UI (or init) tells the tray what the Free GPU state is so
+                // the menu label stays accurate without us querying AppState.
+                app.listen("sync-tray-freegpu", move |event| {
+                    let enabled = event.payload().trim_matches('"') == "true";
+                    let label = if enabled { "Free GPU: On" } else { "Free GPU: Off" };
+                    let _ = free_gpu_item3.set_text(label);
+                });
+
+                // Dynamic "Cancel Recording" — insert/remove based on recording state.
+                // Menu layout (stable) for reference:
+                //   0  autoformat
+                //   1  cleanup_sub
+                //   2  email_sub
+                //   3..7  fmt_letter/bullet/notes/docs/msg
+                //   8  sep_gpu
+                //   9  free_gpu
+                //   10 sep2  <-- cancel block inserts at this position
+                //   11 show
+                //   12 quit
                 let cancel_sep_dyn = sep1.clone();
                 let cancel_rec_dyn = cancel_rec_item.clone();
                 let tray_menu_dyn = tray_menu.clone();
                 app.listen("recording-state-changed", move |event| {
                     let recording = event.payload().trim_matches('"') == "true";
                     if recording {
-                        // Insert separator + cancel item before the bottom separator (position 8)
-                        let _ = tray_menu_dyn.insert(&cancel_sep_dyn, 8);
-                        let _ = tray_menu_dyn.insert(&cancel_rec_dyn, 9);
+                        // Insert separator + cancel item before the bottom separator
+                        let _ = tray_menu_dyn.insert(&cancel_sep_dyn, 10);
+                        let _ = tray_menu_dyn.insert(&cancel_rec_dyn, 11);
                     } else {
                         let _ = tray_menu_dyn.remove(&cancel_rec_dyn);
                         let _ = tray_menu_dyn.remove(&cancel_sep_dyn);

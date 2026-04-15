@@ -3055,6 +3055,8 @@
       }
       forceCpuHint.style.display = isOn ? 'block' : 'none';
       localStorage.setItem('dictator-force-cpu', isOn ? '1' : '0');
+      // Keep the tray menu label in sync.
+      emit('sync-tray-freegpu', String(isOn));
       try {
         await invoke('set_force_cpu', { force: isOn });
         // Reload the whisper model with the new GPU preference. On "Free GPU
@@ -3065,6 +3067,27 @@
         updateGpuStatus();
       } catch (e) { /* ignore — model reload happens on next use */ }
     }
+
+    // Tray → UI: user toggled Free GPU from the context menu. Reflect the
+    // new state in both UI toggles, localStorage, and status row. We skip
+    // the backend invoke because the tray handler already updated AppState.
+    listen('freegpu-changed', async (event) => {
+      const isOn = event.payload === true;
+      if (isOn) {
+        forceCpuToggle.classList.add('on');
+        freeGpuToggle.classList.add('on');
+        gpuFreeRow.classList.add('active');
+        forceCpuHint.style.display = 'block';
+      } else {
+        forceCpuToggle.classList.remove('on');
+        freeGpuToggle.classList.remove('on');
+        gpuFreeRow.classList.remove('active');
+        forceCpuHint.style.display = 'none';
+      }
+      localStorage.setItem('dictator-force-cpu', isOn ? '1' : '0');
+      try { await invoke('load_whisper_model'); } catch (_) {}
+      try { await updateGpuStatus(); } catch (_) {}
+    });
 
     forceCpuToggle.addEventListener('click', () => {
       applyForceCpu(!forceCpuToggle.classList.contains('on'));
@@ -3143,7 +3166,7 @@
       try { await updateGpuStatus(); } catch (e) { /* ignore */ }
 
       // Restore force CPU toggle — sync from localStorage AND tell backend.
-      // Keep the main-screen "Free GPU" toggle visually in sync.
+      // Keep the main-screen "Free GPU" toggle and the tray menu label in sync.
       {
         const savedForceCpu = localStorage.getItem('dictator-force-cpu') === '1';
         if (savedForceCpu) {
@@ -3158,6 +3181,7 @@
           forceCpuHint.style.display = 'none';
         }
         await invoke('set_force_cpu', { force: savedForceCpu }).catch(() => {});
+        emit('sync-tray-freegpu', String(savedForceCpu));
       }
     }
 
