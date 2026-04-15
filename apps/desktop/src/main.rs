@@ -320,16 +320,19 @@ fn get_gpu_status(state: State<AppState>) -> serde_json::Value {
     let llm_gpu = *state.llm_using_gpu.lock().unwrap();
     let force_cpu = *state.force_cpu.lock().unwrap();
 
-    // Pre-flight detection result. "hardware_gpu_available" lets the UI tell
-    // the difference between "no GPU in this machine" (expected, no action
-    // needed) and "GPU skipped because of crash recovery" (user can retry).
+    // Pre-flight detection result. Two tiers:
+    // - `hardware_gpu_available`: good enough for Whisper (legit GPU at all)
+    // - `llm_gpu_capable`: good enough for LLM (discrete GPU or ≥4 GB iGPU)
+    // The UI uses both to distinguish "no GPU" from "GPU disabled after
+    // crash" and "Whisper GPU but LLM will stay on CPU".
     #[cfg(feature = "gpu")]
-    let (hardware_gpu_available, gpu_summary) = {
+    let (hardware_gpu_available, llm_gpu_capable, gpu_summary) = {
         let d = gpu_detect::detect();
-        (d.is_usable(), d.summary())
+        (d.is_usable(), d.is_suitable_for_llm(), d.summary())
     };
     #[cfg(not(feature = "gpu"))]
-    let (hardware_gpu_available, gpu_summary): (bool, String) = (false, "GPU not compiled in".to_string());
+    let (hardware_gpu_available, llm_gpu_capable, gpu_summary): (bool, bool, String) =
+        (false, false, "GPU not compiled in".to_string());
 
     serde_json::json!({
         "whisper_gpu": whisper_gpu,
@@ -345,6 +348,10 @@ fn get_gpu_status(state: State<AppState>) -> serde_json::Value {
         // pre-flight filters). False means no GPU, only a software renderer,
         // or not enough VRAM — "Try GPU Again" won't help those cases.
         "hardware_gpu_available": hardware_gpu_available,
+        // True if the detected GPU is also strong enough for LLM offload
+        // (discrete GPU or integrated with ≥4 GB VRAM). False on e.g.
+        // Intel UHD: Whisper GPU is fine but LLM stays on CPU.
+        "llm_gpu_capable": llm_gpu_capable,
         // Human-readable summary of the detected GPU (or reason it was
         // rejected). Safe to surface in the UI.
         "gpu_summary": gpu_summary,

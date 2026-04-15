@@ -51,8 +51,34 @@ pub enum GpuDetection {
 }
 
 impl GpuDetection {
+    /// Suitable for Whisper: any legit GPU passed all our filters. Whisper
+    /// models are ~150 MB and run fine even on minimal integrated GPUs like
+    /// Intel UHD — those pass.
     pub fn is_usable(&self) -> bool {
         matches!(self, GpuDetection::Usable { .. })
+    }
+
+    /// Suitable for LLM: stricter than `is_usable()`. LLM models are 1.5–4 GB
+    /// quantized — big enough that weak integrated GPUs either fail to fit
+    /// the model, or worse, "accept" the load via memory overcommit and then
+    /// HANG on the first inference pass (observed on Intel UHD).
+    ///
+    /// Rule: require a discrete GPU, OR an integrated GPU with ≥4 GB of
+    /// device-local memory. That accepts modern iGPUs with generous shared
+    /// allocations (Intel Iris Xe with 4 GB shared, AMD APU configs) while
+    /// rejecting underpowered ones like Intel UHD that report small dedicated
+    /// heaps.
+    ///
+    /// Users with capable integrated GPUs that fall below the threshold can
+    /// still get LLM-on-GPU behavior by disabling "Free GPU" — but the safe
+    /// default is CPU for the LLM path.
+    pub fn is_suitable_for_llm(&self) -> bool {
+        match self {
+            GpuDetection::Usable { device_type, vram_mb, .. } => {
+                *device_type == "discrete GPU" || *vram_mb >= 4096
+            }
+            _ => false,
+        }
     }
 
     /// Short human-readable summary for logs and the UI status row.

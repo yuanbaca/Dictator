@@ -3240,7 +3240,15 @@
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === true && gpu.llm_gpu === null) {
-        gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use GPU when loaded';
+        // LLM hasn't loaded yet — whether it'll use GPU depends on
+        // llm_gpu_capable (the stricter Vulkan check). On integrated GPUs
+        // like Intel UHD this is false and the LLM will stay on CPU even
+        // though Whisper got GPU.
+        if (gpu.llm_gpu_capable === false) {
+          gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use CPU';
+        } else {
+          gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use GPU when loaded';
+        }
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === true) {
@@ -3252,7 +3260,14 @@
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === false && gpu.llm_gpu === null) {
-        gpuEl.textContent = 'Running on CPU — LLM will attempt GPU when loaded';
+        // Symmetric note: LLM might or might not attempt GPU depending on
+        // the stricter capability check. This branch fires when Whisper
+        // already tried and fell back.
+        if (gpu.llm_gpu_capable === false) {
+          gpuEl.textContent = 'Running on CPU';
+        } else {
+          gpuEl.textContent = 'Running on CPU — LLM will attempt GPU when loaded';
+        }
         gpuEl.className = 'info-text muted';
       } else if (gpu.whisper_gpu === false) {
         gpuEl.textContent = 'Running on CPU';

@@ -44,15 +44,18 @@ impl Formatter {
             LlamaBackend::init().map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
 
         // Skip GPU if the user forced CPU, the guard detected a crash from a
-        // previous session, OR pre-flight detection says no usable GPU is
-        // present. The third check is critical for GPU-less hardware —
-        // llama.cpp otherwise happily accepts software renderers and hangs
-        // during actual inference.
+        // previous session, OR pre-flight detection says no LLM-capable GPU
+        // is present. The third check is critical: llama.cpp otherwise
+        // happily accepts software renderers and underpowered integrated
+        // GPUs (observed on Intel UHD — "loads" via memory overcommit then
+        // hangs on first inference). `is_suitable_for_llm` is stricter than
+        // the Whisper check — it requires a discrete GPU or an integrated
+        // one with ≥4 GB device-local memory.
         let crash_skip = crate::gpu_guard::session_disabled();
         #[cfg(feature = "gpu")]
         let detect_result = crate::gpu_detect::detect();
         #[cfg(feature = "gpu")]
-        let detect_skip = !detect_result.is_usable();
+        let detect_skip = !detect_result.is_suitable_for_llm();
         #[cfg(not(feature = "gpu"))]
         let detect_skip = false;
         let skip_gpu = force_cpu || crash_skip || detect_skip;
@@ -94,10 +97,11 @@ impl Formatter {
             } else if crash_skip {
                 eprintln!("LLM: skipping GPU — previous session crashed (marker detected)");
             } else {
-                // detect_skip must be true — log the reason
+                // detect_skip must be true — either no GPU at all, or a GPU
+                // that passes Whisper's filter but not LLM's stricter one.
                 #[cfg(feature = "gpu")]
                 eprintln!(
-                    "LLM: skipping GPU — no usable GPU detected ({})",
+                    "LLM: skipping GPU — not suitable for LLM ({})",
                     detect_result.summary()
                 );
             }
