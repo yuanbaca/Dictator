@@ -515,6 +515,54 @@
     .info-text.accent { color: var(--accent); }
     .info-text.muted { color: var(--text-muted); }
 
+    /* "Free GPU" quick-toggle row in the info bar. Visible on the main
+       screen so gamers (and anyone who needs VRAM elsewhere) don't have
+       to dig into Settings to disable GPU. Wired to the same backend
+       state as the Force CPU setting — the two toggles stay in sync. */
+    .gpu-free-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      padding: 8px 10px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .gpu-free-row.active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
+    }
+    .gpu-free-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+    .gpu-free-icon {
+      font-size: 18px;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .gpu-free-text {
+      flex: 1;
+      min-width: 0;
+    }
+    .gpu-free-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .gpu-free-sub {
+      font-size: 10.5px;
+      color: var(--text-muted);
+      line-height: 1.35;
+      margin-top: 2px;
+    }
+
     /* Settings Modal */
     .modal-overlay {
       position: fixed;
@@ -762,6 +810,19 @@
       <div id="certHelp" class="cert-help"></div>
       <div class="info-text muted" id="phoneStatus">No phone connected</div>
       <div class="info-text muted" id="gpuStatus"></div>
+
+      <!-- Quick toggle to free GPU VRAM for games / other apps without
+           opening Settings. Mirrors the Force CPU setting. -->
+      <div class="gpu-free-row" id="gpuFreeRow">
+        <div class="gpu-free-label">
+          <span class="gpu-free-icon" aria-hidden="true">&#x1F3AE;</span>
+          <div class="gpu-free-text">
+            <div class="gpu-free-title">Free GPU</div>
+            <div class="gpu-free-sub">Frees up resources on your graphics card so games or other apps can use it. Toggle off when you're done.</div>
+          </div>
+        </div>
+        <div class="toggle" id="freeGpuToggle" title="Unload models from GPU. Transcription continues on CPU."></div>
+      </div>
     </div>
   </div>
 
@@ -2974,16 +3035,42 @@
 
     const forceCpuToggle = document.getElementById('forceCpuToggle');
     const forceCpuHint = document.getElementById('forceCpuHint');
-    forceCpuToggle.addEventListener('click', async () => {
-      const isOn = forceCpuToggle.classList.toggle('on');
+    const freeGpuToggle = document.getElementById('freeGpuToggle');
+    const gpuFreeRow = document.getElementById('gpuFreeRow');
+
+    // Shared handler for the Settings "Force CPU" toggle and the main-screen
+    // "Free GPU" toggle. They're two views of the same backend state, so they
+    // stay in lockstep: flipping one updates the other's visual state, and
+    // both fire the same backend flow (unload models → reload with the new
+    // GPU preference).
+    async function applyForceCpu(isOn) {
+      if (isOn) {
+        forceCpuToggle.classList.add('on');
+        freeGpuToggle.classList.add('on');
+        gpuFreeRow.classList.add('active');
+      } else {
+        forceCpuToggle.classList.remove('on');
+        freeGpuToggle.classList.remove('on');
+        gpuFreeRow.classList.remove('active');
+      }
       forceCpuHint.style.display = isOn ? 'block' : 'none';
       localStorage.setItem('dictator-force-cpu', isOn ? '1' : '0');
       try {
         await invoke('set_force_cpu', { force: isOn });
-        // Reload the whisper model with new GPU setting
+        // Reload the whisper model with the new GPU preference. On "Free GPU
+        // ON" this loads a CPU model (VRAM frees the moment set_force_cpu
+        // drops the GPU one). On "OFF" this reloads on GPU so it's ready
+        // before the user's next dictation.
         await invoke('load_whisper_model');
         updateGpuStatus();
       } catch (e) { /* ignore — model reload happens on next use */ }
+    }
+
+    forceCpuToggle.addEventListener('click', () => {
+      applyForceCpu(!forceCpuToggle.classList.contains('on'));
+    });
+    freeGpuToggle.addEventListener('click', () => {
+      applyForceCpu(!freeGpuToggle.classList.contains('on'));
     });
 
     micDevice.addEventListener('change', async () => {
@@ -3055,14 +3142,19 @@
 
       try { await updateGpuStatus(); } catch (e) { /* ignore */ }
 
-      // Restore force CPU toggle — sync from localStorage AND tell backend
+      // Restore force CPU toggle — sync from localStorage AND tell backend.
+      // Keep the main-screen "Free GPU" toggle visually in sync.
       {
         const savedForceCpu = localStorage.getItem('dictator-force-cpu') === '1';
         if (savedForceCpu) {
           forceCpuToggle.classList.add('on');
+          freeGpuToggle.classList.add('on');
+          gpuFreeRow.classList.add('active');
           forceCpuHint.style.display = 'block';
         } else {
           forceCpuToggle.classList.remove('on');
+          freeGpuToggle.classList.remove('on');
+          gpuFreeRow.classList.remove('active');
           forceCpuHint.style.display = 'none';
         }
         await invoke('set_force_cpu', { force: savedForceCpu }).catch(() => {});
@@ -3078,6 +3170,23 @@
       const recoveryRow = document.getElementById('gpuRecoveryRow');
       if (recoveryRow) {
         recoveryRow.style.display = gpu.gpu_crash_skipped ? 'block' : 'none';
+      }
+
+      // Keep both force-cpu toggles visually in sync with the backend state.
+      // Handles the case where force_cpu was changed by something other than
+      // the click handlers (e.g. a future tray option, external IPC).
+      if (forceCpuToggle && freeGpuToggle && gpuFreeRow) {
+        if (gpu.force_cpu) {
+          forceCpuToggle.classList.add('on');
+          freeGpuToggle.classList.add('on');
+          gpuFreeRow.classList.add('active');
+          if (forceCpuHint) forceCpuHint.style.display = 'block';
+        } else {
+          forceCpuToggle.classList.remove('on');
+          freeGpuToggle.classList.remove('on');
+          gpuFreeRow.classList.remove('active');
+          if (forceCpuHint) forceCpuHint.style.display = 'none';
+        }
       }
 
       if (gpu.gpu_crash_skipped && !gpu.force_cpu) {
