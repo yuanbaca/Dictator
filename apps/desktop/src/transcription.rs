@@ -66,10 +66,12 @@ impl Transcriber {
                     // A crash during inference will leave it in place, which is
                     // what we want: next session will skip GPU and recover.
                     eprintln!("Whisper model loaded with GPU acceleration (Vulkan)");
-                    return Ok(Self {
+                    let transcriber = Self {
                         ctx,
                         using_gpu: true,
-                    });
+                    };
+                    transcriber.warm_up();
+                    return Ok(transcriber);
                 }
                 Err(e) => {
                     // Soft failure: Rust got an Err back, meaning Vulkan is
@@ -101,15 +103,34 @@ impl Transcriber {
             .map_err(|e| anyhow::anyhow!("Failed to load whisper model: {e}"))?;
 
         eprintln!("Whisper model loaded (CPU mode)");
-        Ok(Self {
+        let transcriber = Self {
             ctx,
             using_gpu: false,
-        })
+        };
+        transcriber.warm_up();
+        Ok(transcriber)
     }
 
     /// Whether the model is running on GPU.
     pub fn is_using_gpu(&self) -> bool {
         self.using_gpu
+    }
+
+    /// Run one tiny silent inference to pre-warm kernels, caches, and any
+    /// JIT-compiled shaders. The first real call after model load is otherwise
+    /// noticeably slow — especially on GPU, where Vulkan has to compile
+    /// pipelines on first use. Best-effort: errors are logged but don't
+    /// propagate, since a failed warm-up doesn't break normal use.
+    fn warm_up(&self) {
+        let silence = vec![0.0f32; 16000]; // 1 second of 16kHz silence
+        let start = std::time::Instant::now();
+        match self.transcribe(&silence) {
+            Ok(_) => eprintln!(
+                "Whisper warm-up complete ({:.2}s)",
+                start.elapsed().as_secs_f32()
+            ),
+            Err(e) => eprintln!("Whisper warm-up failed (non-fatal): {e}"),
+        }
     }
 
     /// Transcribe audio samples.
@@ -137,6 +158,14 @@ impl Transcriber {
 
         // English language
         params.set_language(Some("en"));
+
+        // Decode each call independently — don't carry the prior utterance's
+        // tokens into this one as context. Equivalent to faster-whisper's
+        // `condition_on_previous_text=False`. Without this, Whisper's KV state
+        // can bleed between back-to-back calls and cause hallucinated repeats.
+        // Important now (correctness for press-to-talk), essential for live
+        // mode where we call transcribe once per VAD-gated segment.
+        params.set_no_context(true);
 
         // Enable token-level timestamps
         params.set_token_timestamps(true);
