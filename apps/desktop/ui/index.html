@@ -581,7 +581,11 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       width: 90%;
-      max-width: 380px;
+      /* Widened from 380 in the 420-wide-window era. With the window now at
+         560, Settings can breathe — labels stay on one line, diagnostic
+         rows don't feel squeezed. Still 90% of the window so a user who
+         shrinks it down stays fine. */
+      max-width: 500px;
       max-height: 80vh;
       overflow-y: auto;
     }
