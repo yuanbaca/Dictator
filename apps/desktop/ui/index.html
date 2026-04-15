@@ -1031,6 +1031,14 @@
           Models will reload on CPU next time they're used
         </div>
 
+        <!-- Detected-GPU diagnostic. Populated from get_gpu_status.gpu_summary
+             + llm_gpu_capable so users can see what Vulkan enumeration found
+             and why LLM might be staying on CPU even when Whisper is on GPU. -->
+        <div id="gpuDiagnosticRow" style="display:none; padding:8px 10px; margin:4px 0 10px; background:var(--bg-elev); border:1px solid var(--border); border-radius:6px; font-size:11px; color:var(--text-muted); line-height:1.45;">
+          <div><strong id="gpuDiagName" style="color:var(--text);"></strong></div>
+          <div id="gpuDiagDetail"></div>
+        </div>
+
         <div id="gpuRecoveryRow" style="display:none; padding:10px 12px; margin:4px 0 12px; background:var(--bg-elev); border:1px solid var(--border); border-radius:6px;">
           <div style="font-size:12px; color:var(--text); margin-bottom:6px;">
             <strong>GPU disabled this session</strong>
@@ -3202,6 +3210,28 @@
       const recoveryRow = document.getElementById('gpuRecoveryRow');
       if (recoveryRow) {
         recoveryRow.style.display = (gpu.gpu_crash_skipped && hasHardwareGpu) ? 'block' : 'none';
+      }
+
+      // GPU diagnostic row — shows what Vulkan enumeration actually found,
+      // plus whether the detected GPU clears the stricter LLM threshold.
+      // Helps debug "app says GPU active but still hangs on LLM" reports.
+      const diagRow = document.getElementById('gpuDiagnosticRow');
+      if (diagRow && gpu.compiled) {
+        const name = document.getElementById('gpuDiagName');
+        const detail = document.getElementById('gpuDiagDetail');
+        if (gpu.gpu_summary && name && detail) {
+          name.textContent = 'Detected: ' + gpu.gpu_summary;
+          if (gpu.hardware_gpu_available === false) {
+            detail.textContent = 'No compatible GPU — both Whisper and LLM will run on CPU.';
+          } else if (gpu.llm_gpu_capable === false) {
+            detail.textContent = 'Whisper can use this GPU; LLM requires a discrete GPU and will run on CPU.';
+          } else {
+            detail.textContent = 'Whisper and LLM will both use this GPU.';
+          }
+          diagRow.style.display = 'block';
+        } else {
+          diagRow.style.display = 'none';
+        }
       }
 
       // Keep both force-cpu toggles visually in sync with the backend state.

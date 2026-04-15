@@ -59,23 +59,24 @@ impl GpuDetection {
     }
 
     /// Suitable for LLM: stricter than `is_usable()`. LLM models are 1.5–4 GB
-    /// quantized — big enough that weak integrated GPUs either fail to fit
-    /// the model, or worse, "accept" the load via memory overcommit and then
-    /// HANG on the first inference pass (observed on Intel UHD).
+    /// quantized — big enough that integrated GPUs either fail to fit the
+    /// model, or worse, "accept" the load via memory overcommit and then
+    /// either HANG or take forever on the first inference pass (observed on
+    /// Intel UHD on both Windows and Linux).
     ///
-    /// Rule: require a discrete GPU, OR an integrated GPU with ≥4 GB of
-    /// device-local memory. That accepts modern iGPUs with generous shared
-    /// allocations (Intel Iris Xe with 4 GB shared, AMD APU configs) while
-    /// rejecting underpowered ones like Intel UHD that report small dedicated
-    /// heaps.
+    /// Rule: require a discrete GPU. Integrated GPUs on Windows typically
+    /// report the shared system RAM as DEVICE_LOCAL in Vulkan heaps, so a
+    /// simple VRAM-threshold check can't tell them apart from real dedicated
+    /// VRAM. Discrete-only is the reliable signal.
     ///
-    /// Users with capable integrated GPUs that fall below the threshold can
-    /// still get LLM-on-GPU behavior by disabling "Free GPU" — but the safe
-    /// default is CPU for the LLM path.
+    /// Tradeoff: this rejects capable iGPUs (Intel Iris Xe, some AMD APUs)
+    /// that could technically run an LLM on GPU. Most modern CPUs with AVX2
+    /// run small LLMs fast enough in CPU mode that this isn't noticeable,
+    /// and it's a big reliability win — no more hangs on Intel UHD.
     pub fn is_suitable_for_llm(&self) -> bool {
         match self {
-            GpuDetection::Usable { device_type, vram_mb, .. } => {
-                *device_type == "discrete GPU" || *vram_mb >= 4096
+            GpuDetection::Usable { device_type, .. } => {
+                *device_type == "discrete GPU"
             }
             _ => false,
         }
