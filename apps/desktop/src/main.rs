@@ -451,6 +451,15 @@ fn set_strict_cleanup_notes(state: State<AppState>, notes: String) -> Result<(),
 /// `base` is either the user's custom template override (if any) or `None`
 /// meaning "use the default"; we materialise a string only when we actually
 /// need to append notes.
+///
+/// **Why notes go first:** small local LLMs (Phi-3 Mini etc.) latch onto
+/// early instructions more reliably than trailing ones, and the default
+/// strict-cleanup prompt ends with a hard "IMPORTANT: your entire response
+/// must be the rewritten text and nothing else" block. Appending user notes
+/// after that made the model treat them as optional footnotes. Inverting
+/// the order — user instructions first with explicit priority framing,
+/// default prompt below — puts the user's intent in primary position and
+/// visibly instructs the model to resolve conflicts in the user's favour.
 fn apply_strict_notes(
     format_type: FormatType,
     base: Option<String>,
@@ -462,7 +471,10 @@ fn apply_strict_notes(
     }
     let base_str = base.unwrap_or_else(|| format_type.default_instruction().to_string());
     Some(format!(
-        "{base_str}\n\nAdditional user guidance: {notes_trimmed}"
+        "USER INSTRUCTIONS (these take priority over any conflicting defaults below):\n\
+         {notes_trimmed}\n\n\
+         ---\n\n\
+         {base_str}"
     ))
 }
 
