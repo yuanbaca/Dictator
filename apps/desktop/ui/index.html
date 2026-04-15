@@ -3215,6 +3215,9 @@
       // GPU diagnostic row — shows what Vulkan enumeration actually found,
       // plus whether the detected GPU clears the stricter LLM threshold.
       // Helps debug "app says GPU active but still hangs on LLM" reports.
+      // Language is kept parallel with the main status bar (e.g. "Whisper
+      // on GPU · LLM on CPU") so the two rows reinforce rather than look
+      // like they disagree.
       const diagRow = document.getElementById('gpuDiagnosticRow');
       if (diagRow && gpu.compiled) {
         const name = document.getElementById('gpuDiagName');
@@ -3222,11 +3225,11 @@
         if (gpu.gpu_summary && name && detail) {
           name.textContent = 'Detected: ' + gpu.gpu_summary;
           if (gpu.hardware_gpu_available === false) {
-            detail.textContent = 'No compatible GPU — both Whisper and LLM will run on CPU.';
+            detail.textContent = 'Whisper on CPU · LLM on CPU (no compatible GPU).';
           } else if (gpu.llm_gpu_capable === false) {
-            detail.textContent = 'Whisper can use this GPU; LLM requires a discrete GPU and will run on CPU.';
+            detail.textContent = 'Whisper on GPU · LLM on CPU (LLM needs a discrete GPU).';
           } else {
-            detail.textContent = 'Whisper and LLM will both use this GPU.';
+            detail.textContent = 'Whisper on GPU · LLM on GPU.';
           }
           diagRow.style.display = 'block';
         } else {
@@ -3265,38 +3268,40 @@
       } else if (gpu.gpu_crash_skipped) {
         gpuEl.textContent = 'Running on CPU — GPU disabled after previous crash';
         gpuEl.className = 'info-text muted';
+      // Unified phrasing: "X on GPU · Y on CPU" (same wording the Settings
+      // diagnostic row uses) so the two don't look like they disagree.
       } else if (gpu.whisper_gpu === true && gpu.llm_gpu === true) {
-        gpuEl.textContent = 'GPU acceleration active (Whisper + LLM)';
+        gpuEl.textContent = 'Whisper on GPU · LLM on GPU';
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === true && gpu.llm_gpu === null) {
-        // LLM hasn't loaded yet — whether it'll use GPU depends on
-        // llm_gpu_capable (the stricter Vulkan check). On integrated GPUs
-        // like Intel UHD this is false and the LLM will stay on CPU even
-        // though Whisper got GPU.
+        // LLM hasn't loaded yet. If llm_gpu_capable is false (integrated
+        // GPU like Intel UHD) commit to the honest answer now instead of
+        // dangling a "will use GPU when loaded" promise that won't happen.
         if (gpu.llm_gpu_capable === false) {
-          gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use CPU';
+          gpuEl.textContent = 'Whisper on GPU · LLM on CPU';
         } else {
-          gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use GPU when loaded';
+          gpuEl.textContent = 'Whisper on GPU · LLM loading…';
         }
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
+      } else if (gpu.whisper_gpu === true && gpu.llm_gpu === false) {
+        gpuEl.textContent = 'Whisper on GPU · LLM on CPU';
+        gpuEl.className = 'info-text accent';
+        if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === true) {
-        gpuEl.textContent = 'GPU acceleration active (Whisper only)';
+        gpuEl.textContent = 'Whisper on GPU';
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.llm_gpu === true) {
-        gpuEl.textContent = 'GPU acceleration active (LLM only)';
+        gpuEl.textContent = 'LLM on GPU · Whisper on CPU';
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === false && gpu.llm_gpu === null) {
-        // Symmetric note: LLM might or might not attempt GPU depending on
-        // the stricter capability check. This branch fires when Whisper
-        // already tried and fell back.
         if (gpu.llm_gpu_capable === false) {
           gpuEl.textContent = 'Running on CPU';
         } else {
-          gpuEl.textContent = 'Running on CPU — LLM will attempt GPU when loaded';
+          gpuEl.textContent = 'Whisper on CPU · LLM loading…';
         }
         gpuEl.className = 'info-text muted';
       } else if (gpu.whisper_gpu === false) {
