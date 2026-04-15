@@ -5,6 +5,7 @@ use dictator::gpu_guard;
 use dictator::injection::{self, InjectionMode};
 use dictator::llm;
 use dictator::model_manager;
+use dictator::power_events;
 use dictator::server;
 use dictator::tailscale;
 use dictator::templates::{ChatFormat, FormatType};
@@ -422,6 +423,32 @@ fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> 
     // Gentle handling for too-short recordings
     if duration < 0.3 {
         return Err("hint:Too short \u{2014} hold to record".into());
+    }
+
+    // Lazy-reload the transcriber if it was cleared (e.g. power_events cleared
+    // it on system resume to refresh the Vulkan context). Mirrors the LLM
+    // formatter's lazy-load pattern in format_text.
+    {
+        let mut guard = state.transcriber.lock().unwrap();
+        if guard.is_none() {
+            let model_path = model_manager::find_whisper_model()
+                .ok_or("No whisper model found")?;
+            let fc = *state.force_cpu.lock().unwrap();
+            eprintln!("Reloading whisper model (lazy) from: {}", model_path.display());
+            match transcription::Transcriber::new(&model_path, fc) {
+                Ok(t) => {
+                    *state.using_gpu.lock().unwrap() = Some(t.is_using_gpu());
+                    *guard = Some(t);
+                    let _ = app_handle.emit("model-ready", "ok");
+                }
+                Err(e) => {
+                    let msg = format!("Failed to load model: {e}");
+                    eprintln!("{msg}");
+                    *state.using_gpu.lock().unwrap() = Some(false);
+                    return Err(msg);
+                }
+            }
+        }
     }
 
     let transcriber_guard = state.transcriber.lock().unwrap();
@@ -1875,8 +1902,23 @@ fn main() {
     let connected_phones: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let llm_using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    let llm_status: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let force_cpu: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let selected_device: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    // Layer 2 of GPU resilience: subscribe to Windows suspend/resume events so
+    // we can unload the models before they attempt to run on a stale Vulkan
+    // context. Failure here is non-fatal — Layer 1 (gpu_guard crash marker)
+    // still protects against crash loops even without proactive notifications.
+    if let Err(e) = power_events::register(
+        transcriber.clone(),
+        formatter.clone(),
+        using_gpu.clone(),
+        llm_using_gpu.clone(),
+        llm_status.clone(),
+    ) {
+        eprintln!("power_events: registration failed ({e}) — continuing without sleep/resume detection");
+    }
 
     // Determine LAN IPs for fallback
     let ips = server::get_local_ips();
@@ -1966,7 +2008,7 @@ fn main() {
             minimax_playing: Arc::new(AtomicBool::new(false)),
             minimax_sink: Arc::new(Mutex::new(None)),
             formatter: formatter.clone(),
-            llm_status: Arc::new(Mutex::new(None)),
+            llm_status: llm_status.clone(),
             llm_error: Mutex::new(None),
             no_model: Mutex::new(false),
             tailscale_server_running: Arc::new(AtomicBool::new(false)),
