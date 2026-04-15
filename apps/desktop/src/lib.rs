@@ -13,3 +13,5 @@ pub mod gpu_guard;
 #[cfg(feature = "gpu")]
 pub mod gpu_detect;
 pub mod power_events;
+pub mod vad;
+pub mod live;

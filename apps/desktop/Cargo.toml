@@ -52,6 +52,14 @@ thiserror = "2"
 # Microphone capture
 cpal = "0.15"
 
+# Voice activity detection for live-mode endpointing.
+# Uses Silero VAD via ONNX Runtime (ort crate). Default `download-binaries`
+# fetches the prebuilt onnxruntime.dll at build time and `copy-dylibs` drops
+# it next to the exe automatically — no manual DLL bundling required. Adds
+# ~15 MB to the distribution. Same `ort` major that the future Parakeet
+# integration will use, so the runtime cost is shared.
+voice_activity_detector = { version = "0.2", features = ["async"] }
+
 # Serialization for Tauri commands
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

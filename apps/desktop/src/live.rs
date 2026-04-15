@@ -1,0 +1,136 @@
+//! Live-mode transcription session.
+//!
+//! One session ties together VAD endpointing and per-segment Whisper
+//! transcription. The producer (phone WebSocket handler or local cpal loop)
+//! pushes raw f32 samples at 16 kHz into `frame_tx`; the session spins up a
+//! background task that runs samples through Silero VAD, and whenever the
+//! VAD reports an endpoint, hands that utterance to Whisper on a blocking
+//! thread.
+//!
+//! Transcription results come back via `event_rx` so the producer can inject
+//! them, forward them to the phone, emit a Tauri event to the desktop UI,
+//! and write to history — all orthogonal to what the session does.
+//!
+//! Drop `frame_tx` to end the session cleanly — the task flushes any
+//! in-progress utterance, drains the transcription queue, emits `Ended`,
+//! and shuts down.
+
+use crate::transcription::Transcriber;
+use crate::vad::{Vad, VadEvent};
+use anyhow::Result;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
+
+/// Events emitted by a running live session.
+#[derive(Debug, Clone)]
+pub enum LiveEvent {
+    /// Speech just began on a new utterance. Useful for UI status.
+    SegmentStart,
+    /// A segment finished transcribing.
+    Segment {
+        /// Raw Whisper output for this utterance.
+        text: String,
+        /// Wall-clock milliseconds spent in `transcribe`.
+        duration_ms: u64,
+    },
+    /// Transcription failed for one segment. The session keeps running.
+    SegmentError(String),
+    /// Session has cleanly shut down; no more events will follow.
+    Ended,
+}
+
+/// Producer-facing handle to a running session.
+pub struct LiveSessionHandle {
+    /// Send mono f32 samples at 16 kHz in any chunk size. Drop to end session.
+    pub frame_tx: mpsc::UnboundedSender<Vec<f32>>,
+    /// Pull transcription events.
+    pub event_rx: mpsc::UnboundedReceiver<LiveEvent>,
+}
+
+/// Spawn a live session. Runs until the caller drops `frame_tx`.
+///
+/// `transcriber` is the shared app transcriber; the session locks it inside
+/// `spawn_blocking` per segment, the same pattern press-to-talk uses.
+pub fn spawn(transcriber: Arc<Mutex<Option<Transcriber>>>) -> Result<LiveSessionHandle> {
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<Vec<f32>>();
+    let (event_tx, event_rx) = mpsc::unbounded_channel::<LiveEvent>();
+
+    // Initialize VAD up front so producers can fail fast if onnxruntime.dll
+    // is missing — returning the error synchronously is friendlier than a
+    // silent task crash.
+    let mut vad = Vad::new()?;
+
+    tokio::spawn(async move {
+        // Inner channel: VAD reader pushes completed utterance audio here;
+        // a dedicated transcriber task drains it and runs Whisper. Keeping
+        // the two loops separate means VAD keeps reading new audio even
+        // while Whisper is busy on the previous segment.
+        let (seg_tx, mut seg_rx) = mpsc::unbounded_channel::<Vec<f32>>();
+
+        let transcriber_inner = transcriber.clone();
+        let event_tx_inner = event_tx.clone();
+        let transcriber_task = tokio::spawn(async move {
+            while let Some(samples) = seg_rx.recv().await {
+                let start = std::time::Instant::now();
+                let t = transcriber_inner.clone();
+                let join = tokio::task::spawn_blocking(move || {
+                    let guard = t.lock().unwrap();
+                    match guard.as_ref() {
+                        Some(tx) => tx
+                            .transcribe(&samples)
+                            .map(|r| r.text)
+                            .map_err(|e| e.to_string()),
+                        None => Err("Model not loaded".to_string()),
+                    }
+                })
+                .await;
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let event = match join {
+                    Ok(Ok(text)) => LiveEvent::Segment { text, duration_ms },
+                    Ok(Err(e)) => LiveEvent::SegmentError(e),
+                    Err(e) => LiveEvent::SegmentError(format!("task panicked: {e}")),
+                };
+                if event_tx_inner.send(event).is_err() {
+                    // Receiver dropped — nobody is listening, no point continuing.
+                    break;
+                }
+            }
+        });
+
+        // VAD pump: read audio frames from the producer, feed the VAD, and
+        // forward its events. Start events go straight to the caller; End
+        // events route the utterance samples to the transcriber task.
+        while let Some(samples) = frame_rx.recv().await {
+            vad.push_samples(&samples);
+            for ev in vad.drain_events() {
+                match ev {
+                    VadEvent::Start => {
+                        if event_tx.send(LiveEvent::SegmentStart).is_err() {
+                            break;
+                        }
+                    }
+                    VadEvent::End { samples } => {
+                        if seg_tx.send(samples).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Producer is done — flush whatever the VAD was holding.
+        for ev in vad.flush() {
+            if let VadEvent::End { samples } = ev {
+                let _ = seg_tx.send(samples);
+            }
+        }
+
+        // Closing seg_tx lets the transcriber task drain the queue and exit.
+        drop(seg_tx);
+        let _ = transcriber_task.await;
+        let _ = event_tx.send(LiveEvent::Ended);
+    });
+
+    Ok(LiveSessionHandle { frame_tx, event_rx })
+}
