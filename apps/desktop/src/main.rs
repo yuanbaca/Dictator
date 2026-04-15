@@ -2402,17 +2402,25 @@ fn main() {
             let show_item = tauri::menu::MenuItem::with_id(app, "show", "Show Dictator", true, None::<&str>)?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
-            // Cancel Recording is inserted/removed dynamically via recording-state-changed
+            // Cancel Recording is inserted/removed dynamically via recording-state-changed.
+            // Format items (Cleanup, Email, Formal Letter, etc.) are also dynamic:
+            // they appear only when Auto Format is ON, to keep the menu compact
+            // for users who don't use auto-formatting. Default state is OFF, so
+            // the initial menu excludes them; the UI emits sync-tray-autoformat
+            // on startup and the listener below inserts them if saved=true.
             let tray_menu = tauri::menu::Menu::with_items(app, &[
                 &autoformat_item,
-                &cleanup_sub, &email_sub,
-                &fmt_letter, &fmt_bullet, &fmt_notes, &fmt_docs, &fmt_msg,
                 &sep_gpu,
                 &free_gpu_item,
                 &sep2,
                 &show_item,
                 &quit_item,
             ])?;
+
+            // Tracks whether the format items are currently present in the menu,
+            // so the insert/remove logic stays correct across multiple toggles
+            // and the recording handler knows where sep2 lives.
+            let fmt_items_visible = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
             // Clones for the various closures that need menu item access
             let autoformat_item2 = autoformat_item.clone();
@@ -2431,6 +2439,59 @@ fn main() {
             // sync listener so the menu label reflects UI-initiated changes.
             let free_gpu_item2 = free_gpu_item.clone();
             let free_gpu_item3 = free_gpu_item.clone();
+
+            // Shared helper: insert or remove the format items from the tray
+            // menu based on the new Auto Format state. Used by the tray menu
+            // click handler, the left-click handler, and the sync listener so
+            // all three entry points keep the menu in the same shape.
+            //
+            // Layout when fmt items are visible:
+            //   0 autoformat, 1 cleanup_sub, 2 email_sub,
+            //   3..7 fmt_letter/bullet/notes/docs/msg,
+            //   8 sep_gpu, 9 free_gpu, 10 sep2, 11 show, 12 quit
+            // Layout when hidden:
+            //   0 autoformat, 1 sep_gpu, 2 free_gpu, 3 sep2, 4 show, 5 quit
+            let set_fmt_visible: Arc<dyn Fn(bool) + Send + Sync> = {
+                let cleanup_sub = cleanup_sub.clone();
+                let email_sub = email_sub.clone();
+                let fmt_letter = fmt_letter.clone();
+                let fmt_bullet = fmt_bullet.clone();
+                let fmt_notes = fmt_notes.clone();
+                let fmt_docs = fmt_docs.clone();
+                let fmt_msg = fmt_msg.clone();
+                let tray_menu = tray_menu.clone();
+                let fmt_items_visible = fmt_items_visible.clone();
+                Arc::new(move |enabled: bool| {
+                    let was_visible = fmt_items_visible.load(std::sync::atomic::Ordering::SeqCst);
+                    if enabled && !was_visible {
+                        let _ = tray_menu.insert(&cleanup_sub, 1);
+                        let _ = tray_menu.insert(&email_sub, 2);
+                        let _ = tray_menu.insert(&fmt_letter, 3);
+                        let _ = tray_menu.insert(&fmt_bullet, 4);
+                        let _ = tray_menu.insert(&fmt_notes, 5);
+                        let _ = tray_menu.insert(&fmt_docs, 6);
+                        let _ = tray_menu.insert(&fmt_msg, 7);
+                        fmt_items_visible.store(true, std::sync::atomic::Ordering::SeqCst);
+                    } else if !enabled && was_visible {
+                        let _ = tray_menu.remove(&cleanup_sub);
+                        let _ = tray_menu.remove(&email_sub);
+                        let _ = tray_menu.remove(&fmt_letter);
+                        let _ = tray_menu.remove(&fmt_bullet);
+                        let _ = tray_menu.remove(&fmt_notes);
+                        let _ = tray_menu.remove(&fmt_docs);
+                        let _ = tray_menu.remove(&fmt_msg);
+                        fmt_items_visible.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                })
+            };
+            let set_fmt_visible_menu = set_fmt_visible.clone();
+            let set_fmt_visible_tray = set_fmt_visible.clone();
+            let set_fmt_visible_fmtpick = set_fmt_visible.clone();
+            let set_fmt_visible_sync = set_fmt_visible.clone();
+            // Used by the recording-state listener to compute where the cancel
+            // block should insert (sep2 is at index 3 when fmt items are hidden,
+            // index 10 when visible).
+            let fmt_items_visible_rec = fmt_items_visible.clone();
 
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("Missing app icon").clone())
@@ -2463,6 +2524,8 @@ fn main() {
                             }
                             let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
                             let _ = autoformat_item.set_text(label);
+                            // Show/hide the format submenus + items to match.
+                            set_fmt_visible_menu(enabled);
                         }
                         "cancel_recording" => {
                             if let Some(win) = app.get_webview_window("main") {
@@ -2530,6 +2593,9 @@ fn main() {
                                 let _ = win.emit("autoformat-type-changed", fmt_type.as_str());
                             }
                             let _ = autoformat_item.set_text("Auto Format: On");
+                            // Ensure fmt items are visible (they must be, since
+                            // the user just clicked one — this is defensive).
+                            set_fmt_visible_fmtpick(true);
                             // Update checkmarks
                             let types = [
                                 (&fmt_light, "light_clean_up", "Light Cleanup"),
@@ -2582,6 +2648,8 @@ fn main() {
                         }
                         let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
                         let _ = autoformat_item2.set_text(label);
+                        // Show/hide fmt items to match.
+                        set_fmt_visible_tray(enabled);
                     }
                 })
                 .build(app)?;
@@ -2613,6 +2681,9 @@ fn main() {
                     let enabled = event.payload().trim_matches('"') == "true";
                     let label = if enabled { "Auto Format: On" } else { "Auto Format: Off" };
                     let _ = autoformat_item3.set_text(label);
+                    // Show/hide fmt items to match (lets saved state on startup
+                    // rebuild the menu shape from what the UI reports).
+                    set_fmt_visible_sync(enabled);
                 });
 
                 // UI (or init) tells the tray what the Free GPU state is so
@@ -2624,25 +2695,23 @@ fn main() {
                 });
 
                 // Dynamic "Cancel Recording" — insert/remove based on recording state.
-                // Menu layout (stable) for reference:
-                //   0  autoformat
-                //   1  cleanup_sub
-                //   2  email_sub
-                //   3..7  fmt_letter/bullet/notes/docs/msg
-                //   8  sep_gpu
-                //   9  free_gpu
-                //   10 sep2  <-- cancel block inserts at this position
-                //   11 show
-                //   12 quit
+                //
+                // The cancel block (sep1 + cancel_rec_item) goes just before
+                // sep2. Because the fmt items are also dynamic, sep2's index
+                // depends on Auto Format state:
+                //   fmt hidden  -> sep2 at index 3  (af, sep_gpu, free_gpu, sep2, ...)
+                //   fmt visible -> sep2 at index 10 (af, 7 fmt items, sep_gpu, free_gpu, sep2, ...)
                 let cancel_sep_dyn = sep1.clone();
                 let cancel_rec_dyn = cancel_rec_item.clone();
                 let tray_menu_dyn = tray_menu.clone();
                 app.listen("recording-state-changed", move |event| {
                     let recording = event.payload().trim_matches('"') == "true";
                     if recording {
-                        // Insert separator + cancel item before the bottom separator
-                        let _ = tray_menu_dyn.insert(&cancel_sep_dyn, 10);
-                        let _ = tray_menu_dyn.insert(&cancel_rec_dyn, 11);
+                        let fmt_visible = fmt_items_visible_rec
+                            .load(std::sync::atomic::Ordering::SeqCst);
+                        let sep_idx = if fmt_visible { 10 } else { 3 };
+                        let _ = tray_menu_dyn.insert(&cancel_sep_dyn, sep_idx);
+                        let _ = tray_menu_dyn.insert(&cancel_rec_dyn, sep_idx + 1);
                     } else {
                         let _ = tray_menu_dyn.remove(&cancel_rec_dyn);
                         let _ = tray_menu_dyn.remove(&cancel_sep_dyn);
