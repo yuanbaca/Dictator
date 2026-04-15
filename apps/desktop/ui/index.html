@@ -1320,6 +1320,27 @@
           </select>
         </div>
 
+        <!-- Strict cleanup user guidance. Appended to the Strict cleanup
+             prompt when that format is selected (auto-format, manual
+             Format button, or reformat-selection hotkey). Empty =
+             default prompt, same as before this feature existed. -->
+        <div class="setting-group" id="strictNotesGroup">
+          <label for="strictNotesInput">Strict cleanup guidance (optional)</label>
+          <textarea
+            id="strictNotesInput"
+            rows="3"
+            placeholder="e.g. focus on action items · keep technical terms exact · make it more concise"
+            style="
+              width:100%; font-size:12px; font-family:inherit; color:var(--text);
+              background:var(--bg); border:1px solid var(--border); border-radius:6px;
+              padding:8px; resize:vertical; line-height:1.4; box-sizing:border-box;
+            "
+          ></textarea>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+            Only applied when Strict cleanup is the active format. Other cleanup tiers and format types ignore these notes.
+          </div>
+        </div>
+
         <div id="templateEditorGroup" style="display:none; margin-bottom:12px;">
           <details id="templateEditorDetails">
             <summary style="font-size:12px; color:var(--text-muted); cursor:pointer; user-select:none; padding:4px 0;">
@@ -3769,6 +3790,24 @@
         wordBankEntries = [];
         renderWordBank();
       }
+
+      // Strict cleanup notes — load saved guidance. Saves on blur to avoid
+      // thrashing disk on every keystroke. Empty is fine (most users won't
+      // set this) — it just means the default Strict cleanup prompt is used.
+      const strictNotesInput = document.getElementById('strictNotesInput');
+      try {
+        const notes = await invoke('get_strict_cleanup_notes');
+        strictNotesInput.value = notes || '';
+      } catch (e) {
+        console.error('get_strict_cleanup_notes failed:', e);
+      }
+      strictNotesInput.addEventListener('blur', async () => {
+        try {
+          await invoke('set_strict_cleanup_notes', { notes: strictNotesInput.value });
+        } catch (err) {
+          console.error('set_strict_cleanup_notes failed:', err);
+        }
+      });
 
       // Sync auto-format state from localStorage to backend AND tray
       try {

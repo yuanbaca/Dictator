@@ -92,6 +92,11 @@ struct AppState {
     tailscale_cert_generated: Mutex<Option<u64>>,
     /// Custom template instructions (overrides defaults in templates.rs)
     custom_templates: Arc<Mutex<HashMap<String, String>>>,
+    /// Extra user guidance appended to the Strict cleanup prompt. Persisted
+    /// to disk so notes like "focus on action items" or "preserve technical
+    /// terms exactly" carry across sessions. Empty string = no guidance
+    /// (default behaviour, same as before the feature existed).
+    strict_cleanup_notes: Arc<Mutex<String>>,
 }
 
 /// Shared references needed to construct a ServerState for the dynamic Tailscale server.
@@ -406,6 +411,59 @@ fn set_word_bank(entries: Vec<word_bank::Entry>) -> Result<(), String> {
         .filter(|e| !e.from.is_empty()) // drop fully-blank rows
         .collect();
     word_bank::save(&cleaned)
+}
+
+// ── Strict cleanup notes (user guidance appended to the strict prompt) ──
+// Small persistent string shown in Settings. Applied by format_text and
+// reformat_selection when the active format is StrictCleanUp. Empty string
+// = no change from the default prompt, which is the v0.4.0 behaviour.
+
+fn strict_cleanup_notes_path() -> std::path::PathBuf {
+    model_manager::models_dir().join("strict_cleanup_notes.txt")
+}
+
+fn load_strict_cleanup_notes() -> String {
+    std::fs::read_to_string(strict_cleanup_notes_path()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_strict_cleanup_notes(state: State<AppState>) -> String {
+    state.strict_cleanup_notes.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_strict_cleanup_notes(state: State<AppState>, notes: String) -> Result<(), String> {
+    // Trim only the outer whitespace — internal newlines (which the user may
+    // use to separate points) are kept intentionally. We DO persist an empty
+    // string (as "") rather than deleting the file, so load is stable.
+    let value = notes.trim().to_string();
+    std::fs::write(strict_cleanup_notes_path(), &value)
+        .map_err(|e| format!("Failed to save strict cleanup notes: {e}"))?;
+    *state.strict_cleanup_notes.lock().unwrap() = value;
+    Ok(())
+}
+
+/// Merge the user's strict-cleanup notes into the system instruction, but
+/// only when the format is `StrictCleanUp` and notes are non-empty. Returns
+/// the owned instruction to pass into `format_text_custom` (or `None` to
+/// fall back to whatever the caller would have used).
+///
+/// `base` is either the user's custom template override (if any) or `None`
+/// meaning "use the default"; we materialise a string only when we actually
+/// need to append notes.
+fn apply_strict_notes(
+    format_type: FormatType,
+    base: Option<String>,
+    notes: &str,
+) -> Option<String> {
+    let notes_trimmed = notes.trim();
+    if format_type != FormatType::StrictCleanUp || notes_trimmed.is_empty() {
+        return base;
+    }
+    let base_str = base.unwrap_or_else(|| format_type.default_instruction().to_string());
+    Some(format!(
+        "{base_str}\n\nAdditional user guidance: {notes_trimmed}"
+    ))
 }
 
 // ── History (persistent transcription log) ──────────────────────────────
@@ -1863,13 +1921,17 @@ fn format_text(
     let guard = state.formatter.lock().unwrap();
     let formatter = guard.as_ref().ok_or("LLM not loaded")?;
 
-    // Check for a custom template override
+    // Check for a custom template override, then layer the user's strict-
+    // cleanup notes on top (only applied when format_type == StrictCleanUp).
     let customs = state.custom_templates.lock().unwrap();
     let custom_instruction = customs.get(format_type.key()).cloned();
     drop(customs);
 
+    let notes = state.strict_cleanup_notes.lock().unwrap().clone();
+    let merged = apply_strict_notes(format_type, custom_instruction, &notes);
+
     formatter
-        .format_text_custom(&text, format_type, custom_instruction.as_deref())
+        .format_text_custom(&text, format_type, merged.as_deref())
         .map_err(|e| format!("{e}"))
 }
 
@@ -1978,7 +2040,13 @@ fn reformat_selection(state: State<AppState>) -> Result<String, String> {
     let custom_instruction = customs.get(format_type.key()).cloned();
     drop(customs);
 
-    let formatted = match formatter.format_text_custom(&selected, format_type, custom_instruction.as_deref()) {
+    // Layer the user's strict-cleanup notes on top of any custom override.
+    // Only fires when format_type == StrictCleanUp; other cleanup tiers
+    // passed through this hotkey get their default / custom prompt unchanged.
+    let notes = state.strict_cleanup_notes.lock().unwrap().clone();
+    let merged = apply_strict_notes(format_type, custom_instruction, &notes);
+
+    let formatted = match formatter.format_text_custom(&selected, format_type, merged.as_deref()) {
         Ok(text) => text,
         Err(e) => {
             drop(guard);
@@ -2179,6 +2247,7 @@ fn main() {
             custom_templates: Arc::new(Mutex::new(
                 dictator::templates::load_custom_templates(),
             )),
+            strict_cleanup_notes: Arc::new(Mutex::new(load_strict_cleanup_notes())),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -2203,6 +2272,8 @@ fn main() {
             add_history_entry,
             delete_history_entry,
             clear_history,
+            get_strict_cleanup_notes,
+            set_strict_cleanup_notes,
             retry_gpu,
             list_audio_devices,
             get_selected_device,
