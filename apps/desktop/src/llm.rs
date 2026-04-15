@@ -43,12 +43,27 @@ impl Formatter {
         let backend =
             LlamaBackend::init().map_err(|e| LlmError::LoadFailed(format!("{e}")))?;
 
-        // Skip GPU if the user forced CPU OR if the guard detected a crash
-        // from a previous session (Vulkan may still be in a bad state).
+        // Skip GPU if the user forced CPU, the guard detected a crash from a
+        // previous session, OR pre-flight detection says no usable GPU is
+        // present. The third check is critical for GPU-less hardware —
+        // llama.cpp otherwise happily accepts software renderers and hangs
+        // during actual inference.
         let crash_skip = crate::gpu_guard::session_disabled();
-        let skip_gpu = force_cpu || crash_skip;
+        #[cfg(feature = "gpu")]
+        let detect_result = crate::gpu_detect::detect();
+        #[cfg(feature = "gpu")]
+        let detect_skip = !detect_result.is_usable();
+        #[cfg(not(feature = "gpu"))]
+        let detect_skip = false;
+        let skip_gpu = force_cpu || crash_skip || detect_skip;
 
         let (model, using_gpu) = if !skip_gpu {
+            #[cfg(feature = "gpu")]
+            eprintln!(
+                "Attempting Vulkan GPU acceleration for LLM ({})...",
+                detect_result.summary()
+            );
+            #[cfg(not(feature = "gpu"))]
             eprintln!("Attempting Vulkan GPU acceleration for LLM...");
             crate::gpu_guard::arm();
             let gpu_params = LlamaModelParams::default(); // n_gpu_layers defaults to -1 (all layers)
@@ -74,10 +89,17 @@ impl Formatter {
                 }
             }
         } else {
-            if crash_skip && !force_cpu {
+            if force_cpu {
+                eprintln!("Force CPU mode — skipping GPU for LLM");
+            } else if crash_skip {
                 eprintln!("LLM: skipping GPU — previous session crashed (marker detected)");
             } else {
-                eprintln!("Force CPU mode — skipping GPU for LLM");
+                // detect_skip must be true — log the reason
+                #[cfg(feature = "gpu")]
+                eprintln!(
+                    "LLM: skipping GPU — no usable GPU detected ({})",
+                    detect_result.summary()
+                );
             }
             let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
             let m = LlamaModel::load_from_file(&backend, model_path, &cpu_params)

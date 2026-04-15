@@ -3189,11 +3189,19 @@
       const gpu = await invoke('get_gpu_status');
       const gpuEl = document.getElementById('gpuStatus');
 
-      // Show/hide the "Try GPU Again" recovery row in Settings based on whether
-      // the guard is currently skipping GPU due to a previous crash.
+      // Reset the diagnostic tooltip — each branch below may repopulate it.
+      // Without this, state transitions (e.g. GPU succeeded → later disabled)
+      // would leave a stale summary hovering on the status row.
+      gpuEl.title = '';
+
+      // Hardware-availability check has the last word on whether "Try GPU
+      // Again" makes sense: on a box with no real GPU the retry can't help,
+      // so hide the recovery row even if the crash marker is set. Retry is
+      // only shown when a real GPU exists AND a prior crash disabled it.
+      const hasHardwareGpu = gpu.hardware_gpu_available !== false; // treat undefined as "unknown → assume yes"
       const recoveryRow = document.getElementById('gpuRecoveryRow');
       if (recoveryRow) {
-        recoveryRow.style.display = gpu.gpu_crash_skipped ? 'block' : 'none';
+        recoveryRow.style.display = (gpu.gpu_crash_skipped && hasHardwareGpu) ? 'block' : 'none';
       }
 
       // Keep both force-cpu toggles visually in sync with the backend state.
@@ -3213,24 +3221,36 @@
         }
       }
 
-      if (gpu.gpu_crash_skipped && !gpu.force_cpu) {
-        gpuEl.textContent = 'Running on CPU — GPU disabled after previous crash';
-        gpuEl.className = 'info-text muted';
-      } else if (gpu.force_cpu) {
+      // Precedence: user intent (force_cpu) → hardware reality
+      // (hardware_gpu_available) → runtime crash (gpu_crash_skipped) → active
+      // states → generic fallback. Hardware reality beats crash-skip because
+      // retrying won't summon a GPU that isn't there.
+      if (gpu.force_cpu) {
         gpuEl.textContent = 'Running on CPU (forced)';
+        gpuEl.className = 'info-text muted';
+      } else if (gpu.compiled && !hasHardwareGpu) {
+        gpuEl.textContent = 'No compatible GPU detected — running on CPU';
+        gpuEl.className = 'info-text muted';
+        if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
+      } else if (gpu.gpu_crash_skipped) {
+        gpuEl.textContent = 'Running on CPU — GPU disabled after previous crash';
         gpuEl.className = 'info-text muted';
       } else if (gpu.whisper_gpu === true && gpu.llm_gpu === true) {
         gpuEl.textContent = 'GPU acceleration active (Whisper + LLM)';
         gpuEl.className = 'info-text accent';
+        if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === true && gpu.llm_gpu === null) {
         gpuEl.textContent = 'GPU acceleration active (Whisper) — LLM will use GPU when loaded';
         gpuEl.className = 'info-text accent';
+        if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === true) {
         gpuEl.textContent = 'GPU acceleration active (Whisper only)';
         gpuEl.className = 'info-text accent';
+        if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.llm_gpu === true) {
         gpuEl.textContent = 'GPU acceleration active (LLM only)';
         gpuEl.className = 'info-text accent';
+        if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
       } else if (gpu.whisper_gpu === false && gpu.llm_gpu === null) {
         gpuEl.textContent = 'Running on CPU — LLM will attempt GPU when loaded';
         gpuEl.className = 'info-text muted';

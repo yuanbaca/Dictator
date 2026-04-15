@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["gpu"]
-gpu = ["whisper-rs/vulkan", "llama-cpp-2/vulkan"]  # Vulkan GPU acceleration (needs Vulkan SDK to build, runtime falls back to CPU)
+gpu = ["whisper-rs/vulkan", "llama-cpp-2/vulkan", "dep:ash"]  # Vulkan GPU acceleration (needs Vulkan SDK to build, runtime falls back to CPU)
 
 [dependencies]
 # Whisper.cpp Rust bindings for local transcription
@@ -38,6 +38,12 @@ hound = "3.5"
 # Local LLM for text formatting
 llama-cpp-2 = "0.1"
 encoding_rs = "0.8"
+
+# Vulkan FFI for pre-flight GPU detection (enumerate physical devices ourselves
+# so we can reject software renderers / insufficient-VRAM adapters before
+# handing off to whisper.cpp / llama.cpp). Gated on the `gpu` feature so
+# CPU-only builds don't pull it in.
+ash = { version = "0.38", optional = true }
 
 # Error handling
 anyhow = "1"

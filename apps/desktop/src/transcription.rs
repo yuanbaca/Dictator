@@ -34,12 +34,27 @@ impl Transcriber {
     pub fn new(model_path: &Path, force_cpu: bool) -> Result<Self> {
         let path_str = model_path.to_str().context("Invalid model path")?;
 
-        // Skip GPU if the user forced CPU OR if the guard detected a crash
-        // from a previous session (Vulkan may still be in a bad state).
+        // Skip GPU if the user forced CPU, the guard detected a crash from a
+        // previous session, OR pre-flight detection says no usable GPU is
+        // present. The third check is critical for GPU-less hardware —
+        // whisper.cpp otherwise happily accepts software renderers (Microsoft
+        // Basic Render Driver etc.) and hangs during actual inference.
         let crash_skip = crate::gpu_guard::session_disabled();
-        let skip_gpu = force_cpu || crash_skip;
+        #[cfg(feature = "gpu")]
+        let detect_result = crate::gpu_detect::detect();
+        #[cfg(feature = "gpu")]
+        let detect_skip = !detect_result.is_usable();
+        #[cfg(not(feature = "gpu"))]
+        let detect_skip = false;
+        let skip_gpu = force_cpu || crash_skip || detect_skip;
 
         if !skip_gpu {
+            #[cfg(feature = "gpu")]
+            eprintln!(
+                "Attempting Vulkan GPU acceleration for Whisper ({})...",
+                detect_result.summary()
+            );
+            #[cfg(not(feature = "gpu"))]
             eprintln!("Attempting Vulkan GPU acceleration for Whisper...");
             crate::gpu_guard::arm();
             let mut gpu_params = WhisperContextParameters::default();
@@ -65,10 +80,17 @@ impl Transcriber {
                     eprintln!("Falling back to CPU...");
                 }
             }
-        } else if crash_skip && !force_cpu {
+        } else if force_cpu {
+            eprintln!("Force CPU mode — skipping GPU for Whisper");
+        } else if crash_skip {
             eprintln!("Whisper: skipping GPU — previous session crashed (marker detected)");
         } else {
-            eprintln!("Force CPU mode — skipping GPU for Whisper");
+            // detect_skip must be true — log the reason
+            #[cfg(feature = "gpu")]
+            eprintln!(
+                "Whisper: skipping GPU — no usable GPU detected ({})",
+                detect_result.summary()
+            );
         }
 
         // CPU fallback (always works)

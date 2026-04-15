@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use dictator::audio_capture;
+#[cfg(feature = "gpu")]
+use dictator::gpu_detect;
 use dictator::gpu_guard;
 use dictator::injection::{self, InjectionMode};
 use dictator::llm;
@@ -317,6 +319,18 @@ fn get_gpu_status(state: State<AppState>) -> serde_json::Value {
     let whisper_gpu = *state.using_gpu.lock().unwrap();
     let llm_gpu = *state.llm_using_gpu.lock().unwrap();
     let force_cpu = *state.force_cpu.lock().unwrap();
+
+    // Pre-flight detection result. "hardware_gpu_available" lets the UI tell
+    // the difference between "no GPU in this machine" (expected, no action
+    // needed) and "GPU skipped because of crash recovery" (user can retry).
+    #[cfg(feature = "gpu")]
+    let (hardware_gpu_available, gpu_summary) = {
+        let d = gpu_detect::detect();
+        (d.is_usable(), d.summary())
+    };
+    #[cfg(not(feature = "gpu"))]
+    let (hardware_gpu_available, gpu_summary): (bool, String) = (false, "GPU not compiled in".to_string());
+
     serde_json::json!({
         "whisper_gpu": whisper_gpu,
         "llm_gpu": llm_gpu,
@@ -327,9 +341,19 @@ fn get_gpu_status(state: State<AppState>) -> serde_json::Value {
         // True if GPU is currently being skipped because of that crash marker.
         // Cleared once the user clicks "Try GPU Again".
         "gpu_crash_skipped": gpu_guard::session_disabled(),
+        // True if the hardware itself has a usable Vulkan GPU (passed our
+        // pre-flight filters). False means no GPU, only a software renderer,
+        // or not enough VRAM — "Try GPU Again" won't help those cases.
+        "hardware_gpu_available": hardware_gpu_available,
+        // Human-readable summary of the detected GPU (or reason it was
+        // rejected). Safe to surface in the UI.
+        "gpu_summary": gpu_summary,
         // Keep "active" for backward compat with companion page
         "active": whisper_gpu,
-        "compiled": true,
+        // True if this build was compiled with the `gpu` feature. A false here
+        // means the "No compatible GPU detected" UI branch should be skipped
+        // (there's no detection to report) and GPU toggles should be hidden.
+        "compiled": cfg!(feature = "gpu"),
     })
 }
 
