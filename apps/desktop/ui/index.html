@@ -1693,7 +1693,7 @@
     // is active, so it doesn't interfere with other apps.
     let escapeRegistered = false;
     async function updateEscapeShortcut() {
-      const needEscape = isRecording || ttsState !== 'idle';
+      const needEscape = isRecording || liveActive || ttsState !== 'idle';
       if (needEscape && !escapeRegistered) {
         try { await invoke('register_escape_shortcut'); escapeRegistered = true; } catch (_) {}
       } else if (!needEscape && escapeRegistered) {
@@ -1702,6 +1702,17 @@
     }
 
     async function handleEscapeAction() {
+      // Live mode: stop the session (same as clicking mic again)
+      if (liveActive) {
+        try { await invoke('stop_live_session'); } catch (_) {}
+        micBtn.classList.remove('recording');
+        micBtn.classList.add('disabled');
+        micHint.textContent = 'Finishing up...';
+        stopRecTimer();
+        soundRecordStop();
+        // Don't reset liveActive — wait for live-ended event
+        return;
+      }
       if (isRecording) {
         try { await invoke('cancel_recording'); } catch (_) {}
         isRecording = false;
@@ -1943,6 +1954,7 @@
       });
 
       await listen('live-formatting', () => {
+        soundLlmStart();
         micHint.textContent = 'AI formatting...';
         setStatus('transcribing', 'AI formatting...');
       });
@@ -1950,6 +1962,9 @@
       await listen('live-ended', (event) => {
         const { text, formatted } = event.payload;
         liveActive = false;
+        soundComplete();
+        emit('recording-state-changed', 'false');
+        updateEscapeShortcut();
         micBtn.classList.remove('recording', 'disabled');
         stopRecTimer();
         if (text) {
@@ -1960,6 +1975,10 @@
           injectBtn.disabled = false;
           clearBtn.disabled = false;
           formatBtn.disabled = formatSelect.value === 'none';
+
+          // Record to history (same as press-to-talk).
+          const usedFormat = formatted ? (autoFormatType.value || 'none') : 'none';
+          recordHistoryEntry(rawText, text, usedFormat);
         }
         setTimeout(() => transcript.classList.remove('live'), 1500);
         setStatus('ready', 'Ready');
@@ -2238,12 +2257,17 @@
             await invoke('start_live_session');
             liveActive = true;
             liveSegments = [];
+            soundRecordStart();
+            emit('recording-state-changed', 'true');
+            updateEscapeShortcut();
             micBtn.classList.add('recording');
             micHint.textContent = 'Listening... click to stop';
             setStatus('recording', 'Live — listening');
             transcript.textContent = 'Listening...';
             transcript.classList.remove('empty');
             transcript.classList.add('live');
+            hintMsg.classList.remove('visible');
+            errorMsg.classList.remove('visible');
             startRecTimer();
           } catch (e) {
             showError('Live session failed: ' + e);
@@ -2254,6 +2278,7 @@
           } catch (e) {
             showError('Stop failed: ' + e);
           }
+          soundRecordStop();
           micBtn.classList.remove('recording');
           micBtn.classList.add('disabled');
           micHint.textContent = 'Finishing up...';
