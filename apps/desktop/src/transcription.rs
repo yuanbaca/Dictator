@@ -62,15 +62,16 @@ impl Transcriber {
 
             match WhisperContext::new_with_params(path_str, gpu_params) {
                 Ok(ctx) => {
-                    // Leave the marker armed — only disarm on graceful shutdown.
-                    // A crash during inference will leave it in place, which is
-                    // what we want: next session will skip GPU and recover.
                     eprintln!("Whisper model loaded with GPU acceleration (Vulkan)");
                     let transcriber = Self {
                         ctx,
                         using_gpu: true,
                     };
                     transcriber.warm_up();
+                    // GPU load + warm-up succeeded — disarm the crash marker.
+                    // The dangerous window (model init + first inference) is over.
+                    // Sleep/resume is handled proactively by power_events.
+                    crate::gpu_guard::disarm();
                     return Ok(transcriber);
                 }
                 Err(e) => {

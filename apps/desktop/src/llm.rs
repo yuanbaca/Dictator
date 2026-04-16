@@ -73,9 +73,10 @@ impl Formatter {
 
             match LlamaModel::load_from_file(&backend, model_path, &gpu_params) {
                 Ok(m) => {
-                    // Leave the marker armed — only disarm on graceful shutdown.
-                    // A crash during inference (e.g. after GPU sleep/resume)
-                    // will leave it in place; next session will skip GPU.
+                    // GPU load succeeded — disarm the crash marker. The
+                    // dangerous window is over. Sleep/resume invalidation
+                    // is handled proactively by power_events.
+                    crate::gpu_guard::disarm();
                     eprintln!("LLM loaded with GPU layer offloading");
                     (m, true)
                 }

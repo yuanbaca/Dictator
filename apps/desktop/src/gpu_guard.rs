@@ -7,16 +7,14 @@
 //!
 //! We guard against a crash loop with a marker file:
 //!   1. Before attempting any GPU load, we `arm()` — write the marker.
-//!   2. The marker stays on disk for the entire session.
-//!   3. On graceful quit (tray Quit menu), we `disarm()` — delete it.
-//!   4. On next startup, `init()` checks for the marker. If present, the
-//!      previous session crashed or was force-killed while GPU was active,
-//!      so we skip GPU for this session. The UI surfaces a "Try GPU Again"
-//!      affordance so the user can re-enable it on demand.
+//!   2. After successful load + warm-up, we `disarm()` — delete it.
+//!   3. If the process crashes during GPU init, the marker survives and the
+//!      next session skips GPU. The UI surfaces "Try GPU Again" to recover.
 //!
-//! False positives (user force-kills via Task Manager) cost one session of
-//! CPU-only operation and one click to recover. That's an acceptable price
-//! for protection against the real crash loop.
+//! The marker is only armed during the dangerous window (model loading and
+//! first inference). Post-load GPU invalidation from sleep/resume is handled
+//! proactively by `power_events`, which unloads GPU models on resume so they
+//! re-initialize with a fresh Vulkan context on next use.
 //!
 //! Lives next to the exe for portable-install compatibility.
 
