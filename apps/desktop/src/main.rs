@@ -2321,15 +2321,12 @@ fn reformat_selection(state: State<AppState>) -> Result<String, String> {
         return Err("No text selected".to_string());
     }
 
-    // 4. Format with LLM — only cleanup types allowed, fallback to CleanUp
+    // 4. Format with LLM — uses whatever format type is currently selected
+    //    (cleanup, email, bullet points, etc.)
     let format_type_key = state.auto_format_type.lock().unwrap().clone();
-    let parsed: FormatType =
+    let format_type: FormatType =
         serde_json::from_value(serde_json::Value::String(format_type_key.clone()))
             .unwrap_or(FormatType::CleanUp);
-    let format_type = match parsed {
-        FormatType::LightCleanUp | FormatType::CleanUp | FormatType::StrictCleanUp => parsed,
-        _ => FormatType::CleanUp, // non-cleanup formats default to medium
-    };
 
     // Lazy-load the LLM
     {
