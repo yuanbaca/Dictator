@@ -5,6 +5,7 @@ use dictator::audio_capture;
 use dictator::gpu_detect;
 use dictator::gpu_guard;
 use dictator::injection::{self, InjectionMode};
+use dictator::live::{self, LiveEvent};
 use dictator::llm;
 use dictator::model_manager;
 use dictator::power_events;
@@ -29,6 +30,18 @@ struct RecordingSession {
     /// Stored as f32 bits via `to_bits()`; read-and-reset via `swap(0, Relaxed)`.
     peak_level: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Desktop-mic live-mode session. Holds the handles needed to stop the
+/// session cleanly; the event_rx is consumed by a detached tokio task that
+/// drains live events and emits them as Tauri events to the frontend.
+struct DesktopLiveSession {
+    /// Our clone of the live session's audio input channel. Dropping it
+    /// (after the mic capture handle is also stopped) causes the session
+    /// to see no remaining senders and flush its final utterance.
+    frame_tx: tokio::sync::mpsc::UnboundedSender<Vec<f32>>,
+    /// Stopping/dropping this tears down the cpal stream.
+    mic: audio_capture::LiveCaptureHandle,
 }
 
 /// Shared app state accessible from Tauri commands.
@@ -97,6 +110,8 @@ struct AppState {
     /// terms exactly" carry across sessions. Empty string = no guidance
     /// (default behaviour, same as before the feature existed).
     strict_cleanup_notes: Arc<Mutex<String>>,
+    /// Active desktop-mic live session, if any.
+    live_session: Mutex<Option<DesktopLiveSession>>,
 }
 
 /// Shared references needed to construct a ServerState for the dynamic Tailscale server.
@@ -711,6 +726,216 @@ fn cancel_recording(state: State<AppState>) -> Result<(), String> {
     if let Some(thread) = session.thread {
         let _ = thread.join();
     }
+    Ok(())
+}
+
+// ── Live-mode commands (desktop mic) ────────────────────────────────────
+
+/// Start a live-mode session using the desktop's local microphone.
+///
+/// Spawns a VAD + Whisper pipeline and connects the cpal mic stream to it.
+/// A background tokio task drains live events and emits Tauri events
+/// (`live-segment`, `live-ended`, etc.) so the frontend can show a running
+/// transcript.
+///
+/// The caller should listen for `live-ended` before calling
+/// `start_live_session` again.
+#[tauri::command]
+async fn start_live_session(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    // Guard against double-start.
+    {
+        let guard = state.live_session.lock().unwrap();
+        if guard.is_some() {
+            return Err("Live session already running".into());
+        }
+    }
+
+    // Also reject if a press-to-talk recording is in progress.
+    {
+        let guard = state.recording.lock().unwrap();
+        if guard.is_some() {
+            return Err("Cannot start live mode while recording".into());
+        }
+    }
+
+    // Spawn the VAD + Whisper pipeline.
+    let live::LiveSessionHandle { frame_tx, mut event_rx } =
+        live::spawn(state.transcriber.clone())
+            .map_err(|e| format!("Failed to start live session: {e}"))?;
+
+    // Start mic capture, feeding audio into the pipeline.
+    let device = state.selected_device.lock().unwrap().clone();
+    let mic = audio_capture::stream_to_live(frame_tx.clone(), device)
+        .map_err(|e| format!("Failed to open microphone: {e}"))?;
+
+    // Stash the handles.
+    {
+        let mut guard = state.live_session.lock().unwrap();
+        *guard = Some(DesktopLiveSession { frame_tx, mic });
+    }
+
+    // Snapshot format settings for the lifetime of this session.
+    let auto_format = *state.auto_format.lock().unwrap();
+    let format_type: FormatType = {
+        let s = state.auto_format_type.lock().unwrap().clone();
+        serde_json::from_value(serde_json::Value::String(s)).unwrap_or(FormatType::None)
+    };
+    let auto_space = *state.auto_space.lock().unwrap();
+    let injection_mode_str = state.injection_mode.lock().unwrap().clone();
+    let formatter = state.formatter.clone();
+    let force_cpu = *state.force_cpu.lock().unwrap();
+    let will_format = auto_format && format_type != FormatType::None;
+
+    // Background task: drain live events → Tauri events + inject.
+    tokio::spawn(async move {
+        let mut segments: Vec<String> = Vec::new();
+        let mut seg_idx: u32 = 0;
+
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                LiveEvent::SegmentStart => {
+                    let _ = app_handle.emit("live-segment-start", ());
+                }
+                LiveEvent::Segment { text, duration_ms } => {
+                    let bank = word_bank::load();
+                    let corrected = word_bank::apply(&text, &bank);
+                    let trimmed = corrected.trim().to_string();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    let idx = seg_idx;
+                    seg_idx += 1;
+                    segments.push(trimmed.clone());
+
+                    eprintln!("Live segment #{idx}: \"{trimmed}\" ({duration_ms} ms)");
+
+                    let _ = app_handle.emit(
+                        "live-segment",
+                        serde_json::json!({
+                            "index": idx,
+                            "text": trimmed,
+                            "duration_ms": duration_ms,
+                        }),
+                    );
+
+                    if !will_format {
+                        let mut out = trimmed;
+                        if auto_space {
+                            out.push(' ');
+                        }
+                        let mode = match injection_mode_str.as_str() {
+                            "type" => InjectionMode::Type,
+                            _ => InjectionMode::Paste,
+                        };
+                        if let Err(e) = injection::inject_text(&out, mode) {
+                            eprintln!("Live segment inject failed: {e}");
+                        }
+                    }
+                }
+                LiveEvent::SegmentError(msg) => {
+                    eprintln!("Live segment error: {msg}");
+                    let _ = app_handle.emit("live-error", msg);
+                }
+                LiveEvent::Ended => {
+                    let combined = segments.join(" ").trim().to_string();
+
+                    let final_text = if will_format && !combined.is_empty() {
+                        let _ = app_handle.emit("live-formatting", ());
+                        let raw = combined.clone();
+                        let ft = format_type;
+                        let fmt = formatter.clone();
+                        let fc = force_cpu;
+                        let formatted = tokio::task::spawn_blocking(move || {
+                            let mut guard = fmt.lock().unwrap();
+                            if guard.is_none() {
+                                if let Some(path) = llm::find_llm_model_path() {
+                                    match llm::Formatter::new(&path, fc) {
+                                        Ok(f) => *guard = Some(f),
+                                        Err(e) => return Err(format!("{e}")),
+                                    }
+                                } else {
+                                    return Err("No LLM model found".into());
+                                }
+                            }
+                            guard
+                                .as_ref()
+                                .unwrap()
+                                .format_text(&raw, ft)
+                                .map_err(|e| format!("{e}"))
+                        })
+                        .await;
+
+                        match formatted {
+                            Ok(Ok(t)) => t,
+                            Ok(Err(e)) => {
+                                eprintln!("Live auto-format failed: {e}");
+                                combined.clone()
+                            }
+                            Err(e) => {
+                                eprintln!("Live auto-format task panicked: {e}");
+                                combined.clone()
+                            }
+                        }
+                    } else {
+                        combined
+                    };
+
+                    if will_format && !final_text.is_empty() {
+                        let mut out = final_text.clone();
+                        if auto_space {
+                            out.push(' ');
+                        }
+                        let mode = match injection_mode_str.as_str() {
+                            "type" => InjectionMode::Type,
+                            _ => InjectionMode::Paste,
+                        };
+                        if let Err(e) = injection::inject_text(&out, mode) {
+                            eprintln!("Live final inject failed: {e}");
+                        }
+                    }
+
+                    let _ = app_handle.emit(
+                        "live-ended",
+                        serde_json::json!({
+                            "text": final_text,
+                            "formatted": will_format,
+                        }),
+                    );
+                    break;
+                }
+            }
+        }
+    });
+
+    eprintln!("Live mode: desktop mic session started");
+    Ok(())
+}
+
+/// Stop the running live-mode session.
+///
+/// Tears down the cpal mic stream and drops our frame_tx clone. Once
+/// the cpal callback's clone is also gone (~100 ms), the live session
+/// sees no remaining senders, flushes the VAD, drains any in-flight
+/// Whisper jobs, and emits `LiveEvent::Ended`. The background drain
+/// task converts that to a `live-ended` Tauri event.
+#[tauri::command]
+fn stop_live_session(state: State<AppState>) -> Result<(), String> {
+    let session = {
+        let mut guard = state.live_session.lock().unwrap();
+        guard.take().ok_or("No live session running")?
+    };
+
+    // Stop mic capture first — the cpal stream is torn down within ~100 ms.
+    session.mic.stop();
+    // Drop our frame_tx so the session's frame_rx closes once the
+    // callback's clone is also dropped.
+    drop(session.frame_tx);
+
+    eprintln!("Live mode: stop requested, waiting for drain task to emit live-ended");
     Ok(())
 }
 
@@ -2260,6 +2485,7 @@ fn main() {
                 dictator::templates::load_custom_templates(),
             )),
             strict_cleanup_notes: Arc::new(Mutex::new(load_strict_cleanup_notes())),
+            live_session: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -2294,6 +2520,8 @@ fn main() {
             stop_and_transcribe,
             cancel_recording,
             get_recording_level,
+            start_live_session,
+            stop_live_session,
             register_escape_shortcut,
             unregister_escape_shortcut,
             inject_text,

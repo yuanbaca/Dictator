@@ -225,6 +225,12 @@
       font-style: italic;
     }
 
+    .transcript-area.live {
+      max-height: 220px;
+      border-color: var(--danger);
+      text-align: left;
+    }
+
     .action-buttons {
       display: flex;
       gap: 10px;
@@ -1235,6 +1241,14 @@
         </div>
 
         <div class="setting-row">
+          <label>Live mode (beta)</label>
+          <div class="toggle" id="liveModeToggle"></div>
+        </div>
+        <div id="liveModeHint" style="display:none; font-size:11px; color:var(--text-muted); margin:-10px 0 12px;">
+          Streams from your desktop mic. VAD splits on pauses. Click mic to start/stop.
+        </div>
+
+        <div class="setting-row">
           <label>Start on boot</label>
           <div class="toggle" id="autostartToggle"></div>
         </div>
@@ -1651,6 +1665,29 @@
     let rawText = '';     // original whisper output, preserved for re-formatting
     let hotkeyTriggered = false;
 
+    // ── Live mode state ──────────────────────────────────────────────────
+    let liveMode = localStorage.getItem('dictator-live-mode') === 'true';
+    let liveActive = false;
+    let liveSegments = [];
+
+    const liveModeToggle = document.getElementById('liveModeToggle');
+    const liveModeHint = document.getElementById('liveModeHint');
+    if (liveMode) {
+      liveModeToggle.classList.add('on');
+      liveModeHint.style.display = '';
+    }
+
+    liveModeToggle.addEventListener('click', () => {
+      if (isRecording || liveActive) return; // no toggle mid-session
+      liveMode = !liveMode;
+      liveModeToggle.classList.toggle('on', liveMode);
+      liveModeHint.style.display = liveMode ? '' : 'none';
+      localStorage.setItem('dictator-live-mode', liveMode);
+      micHint.textContent = liveMode
+        ? 'Click to start live dictation'
+        : 'Click to start recording';
+    });
+
     // ── Global Escape shortcut management ───────────────────────────────
     // Escape is registered as a global hotkey only while recording or TTS
     // is active, so it doesn't interfere with other apps.
@@ -1885,6 +1922,50 @@
           setStatus('loading', 'Model failed to load');
           showError(event.payload);
         }
+      });
+
+      // ── Live-mode event listeners ──────────────────────────────────────
+      await listen('live-segment-start', () => {
+        // Could animate a "speaking" indicator; for now just log it.
+      });
+
+      await listen('live-segment', (event) => {
+        const { index, text, duration_ms } = event.payload;
+        liveSegments.push(text);
+        transcript.textContent = liveSegments.join(' ');
+        transcript.classList.remove('empty');
+        transcript.classList.add('live');
+        transcript.scrollTop = transcript.scrollHeight;
+      });
+
+      await listen('live-error', (event) => {
+        showError('Live: ' + event.payload);
+      });
+
+      await listen('live-formatting', () => {
+        micHint.textContent = 'AI formatting...';
+        setStatus('transcribing', 'AI formatting...');
+      });
+
+      await listen('live-ended', (event) => {
+        const { text, formatted } = event.payload;
+        liveActive = false;
+        micBtn.classList.remove('recording', 'disabled');
+        stopRecTimer();
+        if (text) {
+          transcript.textContent = text;
+          transcript.classList.remove('empty');
+          currentText = text;
+          rawText = liveSegments.join(' ');
+          injectBtn.disabled = false;
+          clearBtn.disabled = false;
+          formatBtn.disabled = formatSelect.value === 'none';
+        }
+        setTimeout(() => transcript.classList.remove('live'), 1500);
+        setStatus('ready', 'Ready');
+        micHint.textContent = liveMode
+          ? 'Click to start live dictation'
+          : 'Click to start recording';
       });
 
       // Fallback: poll get_status every 2s until model is ready
@@ -2149,6 +2230,39 @@
     micBtn.addEventListener('click', async () => {
       if (micBtn.classList.contains('disabled')) return;
 
+      // ── Live mode branch ──────────────────────────────────────────────
+      if (liveMode) {
+        hotkeyTriggered = false; // live mode does its own injection
+        if (!liveActive) {
+          try {
+            await invoke('start_live_session');
+            liveActive = true;
+            liveSegments = [];
+            micBtn.classList.add('recording');
+            micHint.textContent = 'Listening... click to stop';
+            setStatus('recording', 'Live — listening');
+            transcript.textContent = 'Listening...';
+            transcript.classList.remove('empty');
+            transcript.classList.add('live');
+            startRecTimer();
+          } catch (e) {
+            showError('Live session failed: ' + e);
+          }
+        } else {
+          try {
+            await invoke('stop_live_session');
+          } catch (e) {
+            showError('Stop failed: ' + e);
+          }
+          micBtn.classList.remove('recording');
+          micBtn.classList.add('disabled');
+          micHint.textContent = 'Finishing up...';
+          stopRecTimer();
+        }
+        return;
+      }
+
+      // ── Press-to-talk branch (unchanged) ──────────────────────────────
       if (!isRecording) {
         try {
           await invoke('start_recording');
