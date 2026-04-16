@@ -32,11 +32,17 @@ pub fn list_input_devices() -> Vec<String> {
 /// If `device_name` is Some, uses that device; otherwise uses the system default.
 /// `peak_level` is atomically updated with the maximum absolute sample value
 /// since it was last read (enables real-time silence detection from another thread).
+///
+/// When `preview_tx` is Some, each callback also mono-converts + resamples the
+/// audio to 16 kHz and sends it to the channel, enabling a live VAD preview
+/// to run alongside the recording without a second microphone stream.
+///
 /// Returns mono f32 samples at 16kHz.
 pub fn record_until_stopped(
     stop: Arc<AtomicBool>,
     device_name: Option<String>,
     peak_level: Arc<AtomicU32>,
+    preview_tx: Option<mpsc::UnboundedSender<Vec<f32>>>,
 ) -> Result<Vec<f32>> {
     let host = cpal::default_host();
     let device = if let Some(ref name) = device_name {
@@ -65,6 +71,11 @@ pub fn record_until_stopped(
     let peak_i16 = peak_level.clone();
     let peak_u16 = peak_level.clone();
 
+    // Clone preview sender for each sample-format branch.
+    let ptx_f32 = preview_tx.clone();
+    let ptx_i16 = preview_tx.clone();
+    let ptx_u16 = preview_tx;
+
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
@@ -72,6 +83,12 @@ pub fn record_until_stopped(
                 let chunk_peak = data.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                 peak_f32.fetch_max(chunk_peak.to_bits(), Ordering::Relaxed);
                 samples_clone.lock().unwrap().extend_from_slice(data);
+                // Fork to preview pipeline (mono + resample to 16 kHz)
+                if let Some(ref tx) = ptx_f32 {
+                    let mono = to_mono_f32(data, channels);
+                    let chunk = resample_chunk(&mono, sample_rate, 16000);
+                    let _ = tx.send(chunk);
+                }
             },
             |err| eprintln!("Audio error: {err}"),
             None,
@@ -85,6 +102,11 @@ pub fn record_until_stopped(
                     let chunk_peak = floats.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     peak_i16.fetch_max(chunk_peak.to_bits(), Ordering::Relaxed);
                     sc.lock().unwrap().extend_from_slice(&floats);
+                    if let Some(ref tx) = ptx_i16 {
+                        let mono = to_mono_f32(&floats, channels);
+                        let chunk = resample_chunk(&mono, sample_rate, 16000);
+                        let _ = tx.send(chunk);
+                    }
                 },
                 |err| eprintln!("Audio error: {err}"),
                 None,
@@ -102,6 +124,11 @@ pub fn record_until_stopped(
                     let chunk_peak = floats.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     peak_u16.fetch_max(chunk_peak.to_bits(), Ordering::Relaxed);
                     sc.lock().unwrap().extend_from_slice(&floats);
+                    if let Some(ref tx) = ptx_u16 {
+                        let mono = to_mono_f32(&floats, channels);
+                        let chunk = resample_chunk(&mono, sample_rate, 16000);
+                        let _ = tx.send(chunk);
+                    }
                 },
                 |err| eprintln!("Audio error: {err}"),
                 None,

@@ -231,6 +231,12 @@
       text-align: left;
     }
 
+    .transcript-area.preview {
+      color: var(--text-muted);
+      font-style: italic;
+      border-color: var(--accent);
+    }
+
     .action-buttons {
       display: flex;
       gap: 10px;
@@ -1241,6 +1247,14 @@
         </div>
 
         <div class="setting-row">
+          <label>Live preview</label>
+          <div class="toggle" id="livePreviewToggle"></div>
+        </div>
+        <div id="livePreviewHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px;">
+          Shows rough streaming text while recording. Requires GPU for smooth performance. Does not affect final output.
+        </div>
+
+        <div class="setting-row">
           <label>Live mode (beta)</label>
           <div class="toggle" id="liveModeToggle"></div>
         </div>
@@ -1672,6 +1686,38 @@
     let currentText = '';
     let rawText = '';     // original whisper output, preserved for re-formatting
     let hotkeyTriggered = false;
+
+    // ── Live preview ──────────────────────────────────────────────────────
+    // Shows streaming text preview during regular recordings.
+    const livePreviewToggle = document.getElementById('livePreviewToggle');
+    invoke('get_live_preview').then(on => {
+      livePreviewToggle.classList.toggle('on', on);
+    });
+    livePreviewToggle.addEventListener('click', async () => {
+      if (isRecording) return;
+      const isOn = livePreviewToggle.classList.toggle('on');
+      await invoke('set_live_preview', { enabled: isOn });
+    });
+
+    // Preview segments accumulate here during recording, then get replaced
+    // by the final full-audio transcription.
+    let previewSegments = [];
+    let previewActive = false;
+    listen('preview-segment-start', () => {
+      // Speech detected — could update UI indicator
+    });
+    listen('preview-segment', (event) => {
+      const text = event.payload;
+      if (!text || !text.trim()) return;
+      previewSegments.push(text.trim());
+      // Show accumulating preview in the transcript area
+      if (isRecording) {
+        previewActive = true;
+        transcript.textContent = previewSegments.join(' ');
+        transcript.classList.remove('empty');
+        transcript.classList.add('preview');
+      }
+    });
 
     // ── Live mode state ──────────────────────────────────────────────────
     let liveMode = localStorage.getItem('dictator-live-mode') === 'true';
@@ -2322,6 +2368,11 @@
       // ── Press-to-talk branch (unchanged) ──────────────────────────────
       if (!isRecording) {
         try {
+          // Reset preview state for this recording
+          previewSegments = [];
+          previewActive = false;
+          transcript.classList.remove('preview');
+
           await invoke('start_recording');
           isRecording = true;
           emit('recording-state-changed', 'true');
@@ -2362,6 +2413,11 @@
           // panel can show what Whisper actually heard (useful for
           // discovering new word-bank entries).
           const transcribeResult = await invoke('stop_and_transcribe');
+          // Clear preview — final text replaces it
+          previewActive = false;
+          previewSegments = [];
+          transcript.classList.remove('preview');
+
           const whisperRaw = transcribeResult.raw;
           let text = transcribeResult.text;
           rawText = text;

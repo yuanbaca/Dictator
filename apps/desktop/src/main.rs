@@ -30,6 +30,10 @@ struct RecordingSession {
     /// Stored as f32 bits via `to_bits()`; read-and-reset via `swap(0, Relaxed)`.
     peak_level: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// If live preview is on, holds the frame sender. Dropping it causes the
+    /// preview pipeline to wind down. The event_rx is owned by a detached
+    /// drain task that emits Tauri events.
+    preview_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<f32>>>,
 }
 
 /// Desktop-mic live-mode session. Holds the handles needed to stop the
@@ -113,6 +117,10 @@ struct AppState {
     /// Cross-segment Whisper context for live mode (feeds previous
     /// segment's text as initial_prompt to the next segment).
     live_context: Arc<Mutex<bool>>,
+    /// Live preview: show VAD-segmented preview text during regular
+    /// recordings. Purely visual — the final text always comes from
+    /// the full-audio Whisper pass.
+    live_preview: Arc<Mutex<bool>>,
     /// Active desktop-mic live session, if any.
     live_session: Mutex<Option<DesktopLiveSession>>,
 }
@@ -349,6 +357,16 @@ fn get_live_context(state: State<AppState>) -> bool {
 #[tauri::command]
 fn set_live_context(state: State<AppState>, enabled: bool) {
     *state.live_context.lock().unwrap() = enabled;
+}
+
+#[tauri::command]
+fn get_live_preview(state: State<AppState>) -> bool {
+    *state.live_preview.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_live_preview(state: State<AppState>, enabled: bool) {
+    *state.live_preview.lock().unwrap() = enabled;
 }
 
 #[tauri::command]
@@ -596,7 +614,10 @@ fn retry_gpu(app_handle: tauri::AppHandle, state: State<AppState>) {
 }
 
 #[tauri::command]
-fn start_recording(state: State<AppState>) -> Result<(), String> {
+async fn start_recording(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
     let mut rec_guard = state.recording.lock().unwrap();
     if rec_guard.is_some() {
         return Err("Already recording".into());
@@ -611,8 +632,48 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
     let peak_clone = peak_level.clone();
     let device_name = state.selected_device.lock().unwrap().clone();
 
+    // Optionally spawn a live preview pipeline that runs alongside the
+    // recording. Audio is forked from the same mic callback into the VAD;
+    // preview segments are emitted as Tauri events for the UI to show
+    // in the transcript area. The final transcription still comes from the
+    // full-audio pass after recording stops — the preview is purely visual.
+    let live_preview = *state.live_preview.lock().unwrap();
+    let preview_tx = if live_preview {
+        let cross_ctx = true; // preview always uses cross-segment context
+        match live::spawn(state.transcriber.clone(), cross_ctx) {
+            Ok(live::LiveSessionHandle { frame_tx, mut event_rx }) => {
+                // Detach a drain task that forwards preview events to the UI.
+                let ah = app_handle.clone();
+                tokio::spawn(async move {
+                    while let Some(ev) = event_rx.recv().await {
+                        match ev {
+                            LiveEvent::SegmentStart => {
+                                let _ = ah.emit("preview-segment-start", ());
+                            }
+                            LiveEvent::Segment { text, .. } => {
+                                let _ = ah.emit("preview-segment", &text);
+                            }
+                            LiveEvent::SegmentError(e) => {
+                                eprintln!("preview: segment error: {e}");
+                            }
+                            LiveEvent::Ended => break,
+                        }
+                    }
+                });
+                Some(frame_tx)
+            }
+            Err(e) => {
+                eprintln!("preview: failed to start live pipeline: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let ptx = preview_tx.clone();
     let thread = std::thread::spawn(move || {
-        match audio_capture::record_until_stopped(stop_clone, device_name, peak_clone) {
+        match audio_capture::record_until_stopped(stop_clone, device_name, peak_clone, ptx) {
             Ok(recorded) => {
                 *samples_clone.lock().unwrap() = recorded;
             }
@@ -627,6 +688,7 @@ fn start_recording(state: State<AppState>) -> Result<(), String> {
         samples,
         peak_level,
         thread: Some(thread),
+        preview_tx,
     });
 
     Ok(())
@@ -644,6 +706,12 @@ fn stop_and_transcribe(state: State<AppState>, app_handle: tauri::AppHandle) -> 
     if let Some(thread) = session.thread {
         thread.join().map_err(|_| "Recording thread panicked")?;
     }
+
+    // Kill the preview pipeline (if any) before starting the full Whisper
+    // pass. Dropping the sender causes the session to wind down. Any
+    // in-flight preview segment finishes quickly and releases the Whisper
+    // mutex.
+    drop(session.preview_tx);
 
     let samples = Arc::try_unwrap(session.samples)
         .map_err(|_| "Failed to get samples")?
@@ -738,6 +806,7 @@ fn cancel_recording(state: State<AppState>) -> Result<(), String> {
         guard.take().ok_or("Not recording")?
     };
     session.stop_flag.store(true, Ordering::Relaxed);
+    drop(session.preview_tx); // kill preview pipeline if any
     if let Some(thread) = session.thread {
         let _ = thread.join();
     }
@@ -2383,6 +2452,7 @@ fn main() {
     let auto_format: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let auto_format_type: Arc<Mutex<String>> = Arc::new(Mutex::new("clean_up".into()));
     let live_context: Arc<Mutex<bool>> = Arc::new(Mutex::new(true)); // on by default
+    let live_preview: Arc<Mutex<bool>> = Arc::new(Mutex::new(false)); // off by default — GPU recommended
     let connected_phones: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let llm_using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
@@ -2503,6 +2573,7 @@ fn main() {
             )),
             strict_cleanup_notes: Arc::new(Mutex::new(load_strict_cleanup_notes())),
             live_context: live_context.clone(),
+            live_preview: live_preview.clone(),
             live_session: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
@@ -2521,6 +2592,8 @@ fn main() {
             set_auto_format_type,
             get_live_context,
             set_live_context,
+            get_live_preview,
+            set_live_preview,
             get_gpu_status,
             get_force_cpu,
             set_force_cpu,
