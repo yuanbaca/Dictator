@@ -110,6 +110,9 @@ struct AppState {
     /// terms exactly" carry across sessions. Empty string = no guidance
     /// (default behaviour, same as before the feature existed).
     strict_cleanup_notes: Arc<Mutex<String>>,
+    /// Cross-segment Whisper context for live mode (feeds previous
+    /// segment's text as initial_prompt to the next segment).
+    live_context: Arc<Mutex<bool>>,
     /// Active desktop-mic live session, if any.
     live_session: Mutex<Option<DesktopLiveSession>>,
 }
@@ -125,6 +128,7 @@ struct ServerShared {
     auto_format_type: Arc<Mutex<String>>,
     using_gpu: Arc<Mutex<Option<bool>>>,
     force_cpu: Arc<Mutex<bool>>,
+    live_context: Arc<Mutex<bool>>,
     tts_trigger: std::sync::mpsc::Sender<()>,
 }
 
@@ -247,6 +251,7 @@ fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, Str
                 cert_type: "tailscale".to_string(),
                 using_gpu: ss.using_gpu.clone(),
                 force_cpu: ss.force_cpu.clone(),
+                live_context: ss.live_context.clone(),
                 tts_trigger: Some(ss.tts_trigger.clone()),
             });
 
@@ -334,6 +339,16 @@ fn get_auto_format_type(state: State<AppState>) -> String {
 #[tauri::command]
 fn set_auto_format_type(state: State<AppState>, format_type: String) {
     *state.auto_format_type.lock().unwrap() = format_type;
+}
+
+#[tauri::command]
+fn get_live_context(state: State<AppState>) -> bool {
+    *state.live_context.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_live_context(state: State<AppState>, enabled: bool) {
+    *state.live_context.lock().unwrap() = enabled;
 }
 
 #[tauri::command]
@@ -762,8 +777,9 @@ async fn start_live_session(
     }
 
     // Spawn the VAD + Whisper pipeline.
+    let cross_ctx = *state.live_context.lock().unwrap();
     let live::LiveSessionHandle { frame_tx, mut event_rx } =
-        live::spawn(state.transcriber.clone())
+        live::spawn(state.transcriber.clone(), cross_ctx)
             .map_err(|e| format!("Failed to start live session: {e}"))?;
 
     // Start mic capture, feeding audio into the pipeline.
@@ -2366,6 +2382,7 @@ fn main() {
     let auto_space: Arc<Mutex<bool>> = Arc::new(Mutex::new(true)); // on by default
     let auto_format: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let auto_format_type: Arc<Mutex<String>> = Arc::new(Mutex::new("clean_up".into()));
+    let live_context: Arc<Mutex<bool>> = Arc::new(Mutex::new(true)); // on by default
     let connected_phones: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let llm_using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
@@ -2485,6 +2502,7 @@ fn main() {
                 dictator::templates::load_custom_templates(),
             )),
             strict_cleanup_notes: Arc::new(Mutex::new(load_strict_cleanup_notes())),
+            live_context: live_context.clone(),
             live_session: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
@@ -2501,6 +2519,8 @@ fn main() {
             set_auto_format,
             get_auto_format_type,
             set_auto_format_type,
+            get_live_context,
+            set_live_context,
             get_gpu_status,
             get_force_cpu,
             set_force_cpu,
@@ -2728,6 +2748,7 @@ fn main() {
                     auto_format_type: server_auto_format_type.clone(),
                     using_gpu: server_gpu.clone(),
                     force_cpu: force_cpu.clone(),
+                    live_context: live_context.clone(),
                     tts_trigger: tts_tx.clone(),
                 });
             }
@@ -2783,6 +2804,7 @@ fn main() {
                         cert_type: "self-signed".to_string(),
                         using_gpu: server_gpu,
                         force_cpu: force_cpu,
+                        live_context: live_context,
                         tts_trigger: Some(tts_tx),
                     });
                     server::run_server(

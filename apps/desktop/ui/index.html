@@ -1248,6 +1248,14 @@
           Streams from your desktop mic. VAD splits on pauses. Click mic to start/stop.
         </div>
 
+        <div class="setting-row" id="liveContextRow" style="display:none; padding-left:18px;">
+          <label>Segment context</label>
+          <div class="toggle on" id="liveContextToggle"></div>
+        </div>
+        <div id="liveContextHint" style="display:none; font-size:11px; color:var(--text-muted); margin:-10px 0 12px; padding-left:18px;">
+          Feeds previous segment text into Whisper for better continuity across pauses.
+        </div>
+
         <div class="setting-row">
           <label>Start on boot</label>
           <div class="toggle" id="autostartToggle"></div>
@@ -1675,6 +1683,7 @@
     if (liveMode) {
       liveModeToggle.classList.add('on');
       liveModeHint.style.display = '';
+      document.getElementById('liveContextRow').style.display = '';
     }
 
     liveModeToggle.addEventListener('click', () => {
@@ -1682,10 +1691,33 @@
       liveMode = !liveMode;
       liveModeToggle.classList.toggle('on', liveMode);
       liveModeHint.style.display = liveMode ? '' : 'none';
+      liveContextRow.style.display = liveMode ? '' : 'none';
+      liveContextHint.style.display = liveMode && liveContextToggle.classList.contains('on') ? '' : 'none';
       localStorage.setItem('dictator-live-mode', liveMode);
       micHint.textContent = liveMode
         ? 'Click to start live dictation'
         : 'Click to start recording';
+    });
+
+    // ── Segment context sub-toggle ───────────────────────────────────────
+    const liveContextToggle = document.getElementById('liveContextToggle');
+    const liveContextRow = document.getElementById('liveContextRow');
+    const liveContextHint = document.getElementById('liveContextHint');
+
+    // Init from backend (default on)
+    invoke('get_live_context').then(on => {
+      liveContextToggle.classList.toggle('on', on);
+      if (liveMode) {
+        liveContextRow.style.display = '';
+        liveContextHint.style.display = on ? '' : 'none';
+      }
+    });
+
+    liveContextToggle.addEventListener('click', async () => {
+      if (liveActive) return; // no toggle mid-session
+      const isOn = liveContextToggle.classList.toggle('on');
+      liveContextHint.style.display = isOn ? '' : 'none';
+      await invoke('set_live_context', { enabled: isOn });
     });
 
     // ── Global Escape shortcut management ───────────────────────────────

@@ -37,6 +37,8 @@ pub struct ServerState {
     pub cert_type: String,
     pub using_gpu: Arc<Mutex<Option<bool>>>,
     pub force_cpu: Arc<Mutex<bool>>,
+    /// Cross-segment Whisper context for live mode.
+    pub live_context: Arc<Mutex<bool>>,
     /// Channel for phone to trigger TTS read-aloud on the desktop.
     pub tts_trigger: Option<std::sync::mpsc::Sender<()>>,
 }
@@ -583,7 +585,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                             live_buffer.clear();
                             live_seg_idx = 0;
 
-                            match live::spawn(state.transcriber.clone()) {
+                            let cross_ctx = *state.live_context.lock().unwrap();
+                            match live::spawn(state.transcriber.clone(), cross_ctx) {
                                 Ok(handle) => {
                                     live = Some(handle);
                                     eprintln!(

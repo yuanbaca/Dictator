@@ -137,13 +137,37 @@ impl Transcriber {
     ///
     /// `samples` must be mono f32 audio at 16kHz sample rate.
     pub fn transcribe(&self, samples: &[f32]) -> Result<TranscriptResult> {
-        self.transcribe_with_progress(samples, |_| {})
+        self.transcribe_inner(samples, None, |_| {})
     }
 
     /// Transcribe audio samples with a progress callback (0-100%).
     pub fn transcribe_with_progress<F>(
         &self,
         samples: &[f32],
+        on_progress: F,
+    ) -> Result<TranscriptResult>
+    where
+        F: FnMut(i32) + 'static,
+    {
+        self.transcribe_inner(samples, None, on_progress)
+    }
+
+    /// Transcribe with optional cross-segment context. When `context` is
+    /// provided, it's set as Whisper's `initial_prompt` so the decoder can
+    /// carry linguistic context across VAD-gated segments (e.g. continuing
+    /// a sentence that was split by a pause).
+    pub fn transcribe_with_context(
+        &self,
+        samples: &[f32],
+        context: Option<&str>,
+    ) -> Result<TranscriptResult> {
+        self.transcribe_inner(samples, context, |_| {})
+    }
+
+    fn transcribe_inner<F>(
+        &self,
+        samples: &[f32],
+        context: Option<&str>,
         on_progress: F,
     ) -> Result<TranscriptResult>
     where
@@ -166,6 +190,16 @@ impl Transcriber {
         // Important now (correctness for press-to-talk), essential for live
         // mode where we call transcribe once per VAD-gated segment.
         params.set_no_context(true);
+
+        // Cross-segment context for live mode: feed the tail of the
+        // previous segment's transcription as initial_prompt. This is
+        // independent of no_context (which controls internal KV state).
+        // The prompt conditions the decoder so it can predict function
+        // words, continue compound terms, and handle numbers naturally
+        // across VAD-gated boundaries.
+        if let Some(prompt) = context {
+            params.set_initial_prompt(prompt);
+        }
 
         // Enable token-level timestamps
         params.set_token_timestamps(true);

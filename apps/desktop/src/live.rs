@@ -16,10 +16,19 @@
 //! and shuts down.
 
 use crate::transcription::Transcriber;
-use crate::vad::{Vad, VadEvent};
+use crate::vad::{Vad, VadEvent, SAMPLE_RATE};
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+
+/// Minimum utterance length (in samples) to bother transcribing.
+/// Shorter bursts are almost always coughs, lip smacks, or breaths that
+/// produce garbage from Whisper ("...", "you", etc.). With the current VAD
+/// settings (~640 ms trailing silence + 256 ms lookback), roughly 0.9 s of
+/// each utterance is padding. Requiring 1.1 s total means the speaker must
+/// produce at least ~200 ms of actual speech — enough to filter lip smacks
+/// while keeping single follow-up words like "thing" or "wrong".
+const MIN_UTTERANCE_SAMPLES: usize = SAMPLE_RATE * 11 / 10; // 1.1 s → 17 600 samples
 
 /// Events emitted by a running live session.
 #[derive(Debug, Clone)]
@@ -66,7 +75,14 @@ impl LiveSessionHandle {
 ///
 /// `transcriber` is the shared app transcriber; the session locks it inside
 /// `spawn_blocking` per segment, the same pattern press-to-talk uses.
-pub fn spawn(transcriber: Arc<Mutex<Option<Transcriber>>>) -> Result<LiveSessionHandle> {
+///
+/// When `cross_segment_context` is true, the tail of each segment's
+/// transcription is fed as `initial_prompt` to the next segment, giving
+/// Whisper linguistic continuity across VAD-gated boundaries.
+pub fn spawn(
+    transcriber: Arc<Mutex<Option<Transcriber>>>,
+    cross_segment_context: bool,
+) -> Result<LiveSessionHandle> {
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<Vec<f32>>();
     let (event_tx, event_rx) = mpsc::unbounded_channel::<LiveEvent>();
 
@@ -85,14 +101,35 @@ pub fn spawn(transcriber: Arc<Mutex<Option<Transcriber>>>) -> Result<LiveSession
         let transcriber_inner = transcriber.clone();
         let event_tx_inner = event_tx.clone();
         let transcriber_task = tokio::spawn(async move {
+            // When cross-segment context is on, we carry the tail of the
+            // previous segment's text forward as Whisper's initial_prompt.
+            // Cap at ~200 chars — Whisper's prompt token budget is limited
+            // and we only need the trailing clause for continuity.
+            let mut prev_context: Option<String> = None;
+
             while let Some(samples) = seg_rx.recv().await {
+                // Skip micro-utterances that produce Whisper garbage
+                // ("...", "you", "the", single-word hallucinations).
+                if samples.len() < MIN_UTTERANCE_SAMPLES {
+                    eprintln!(
+                        "live: skipping micro-utterance ({} ms, need {} ms)",
+                        samples.len() * 1000 / SAMPLE_RATE,
+                        MIN_UTTERANCE_SAMPLES * 1000 / SAMPLE_RATE,
+                    );
+                    continue;
+                }
                 let start = std::time::Instant::now();
                 let t = transcriber_inner.clone();
+                let ctx = if cross_segment_context {
+                    prev_context.clone()
+                } else {
+                    None
+                };
                 let join = tokio::task::spawn_blocking(move || {
                     let guard = t.lock().unwrap();
                     match guard.as_ref() {
                         Some(tx) => tx
-                            .transcribe(&samples)
+                            .transcribe_with_context(&samples, ctx.as_deref())
                             .map(|r| r.text)
                             .map_err(|e| e.to_string()),
                         None => Err("Model not loaded".to_string()),
@@ -102,6 +139,15 @@ pub fn spawn(transcriber: Arc<Mutex<Option<Transcriber>>>) -> Result<LiveSession
 
                 let duration_ms = start.elapsed().as_millis() as u64;
                 let event = match join {
+                    Ok(Ok(ref text)) if cross_segment_context => {
+                        // Keep the tail of this segment as context for the next.
+                        let tail: String = text.chars().rev().take(200).collect::<Vec<_>>().into_iter().rev().collect();
+                        prev_context = Some(tail);
+                        LiveEvent::Segment {
+                            text: text.clone(),
+                            duration_ms,
+                        }
+                    }
                     Ok(Ok(text)) => LiveEvent::Segment { text, duration_ms },
                     Ok(Err(e)) => LiveEvent::SegmentError(e),
                     Err(e) => LiveEvent::SegmentError(format!("task panicked: {e}")),

@@ -32,13 +32,18 @@ const CHUNK_SAMPLES: usize = 512;
 const SPEECH_THRESHOLD: f32 = 0.5;
 
 /// Number of consecutive non-speech chunks needed to close an utterance.
-/// 10 chunks * 32 ms = 320 ms of silence. Matches the reference pipeline.
-const MIN_SILENCE_CHUNKS: u32 = 10;
+/// 20 chunks * 32 ms ≈ 640 ms of silence. Compromise between the original
+/// 320 ms (10 chunks, too aggressive — premature endpoints mid-thought)
+/// and 900 ms (28 chunks, accurate but felt sluggish). 640 ms is long
+/// enough that natural thinking pauses don't split utterances, but short
+/// enough that the system still feels responsive.
+const MIN_SILENCE_CHUNKS: u32 = 20;
 
 /// Pre-Start audio kept in a ring buffer and prepended to each utterance.
-/// 5 chunks * 32 ms = 160 ms of lookback, enough to cover Silero's own
-/// detection latency and the attack of the first syllable.
-const LOOKBACK_CHUNKS: usize = 5;
+/// 8 chunks * 32 ms = 256 ms of lookback. With the longer silence
+/// threshold, detection latency matters more — extra lookback protects
+/// the first syllable from being clipped.
+const LOOKBACK_CHUNKS: usize = 8;
 
 /// Events emitted by the VAD as it processes streaming audio.
 #[derive(Debug)]
@@ -129,6 +134,18 @@ impl Vad {
             self.utterance.extend_from_slice(&chunk);
             self.silence_chunks += 1;
             if self.silence_chunks >= MIN_SILENCE_CHUNKS {
+                // Seed the lookback ring with the tail of this utterance
+                // (which is trailing silence) so the NEXT Start has
+                // pre-speech audio immediately. Without this, a quick
+                // follow-up word would have an empty lookback and its
+                // first syllable would be clipped.
+                self.lookback.clear();
+                let tail_samples = LOOKBACK_CHUNKS * CHUNK_SAMPLES;
+                let start = self.utterance.len().saturating_sub(tail_samples);
+                for c in self.utterance[start..].chunks(CHUNK_SAMPLES) {
+                    self.lookback.push_back(c.to_vec());
+                }
+
                 let samples = std::mem::take(&mut self.utterance);
                 self.in_speech = false;
                 self.silence_chunks = 0;
