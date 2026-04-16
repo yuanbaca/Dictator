@@ -2294,6 +2294,10 @@ fn reformat_selection(state: State<AppState>) -> Result<String, String> {
         }
     }
 
+    // Brief delay so the user's hotkey modifier keys (Ctrl+Shift+F) are
+    // physically released before we simulate Ctrl+C.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
     // 1. Save current clipboard
     let old_text = {
         let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;

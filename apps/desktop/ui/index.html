@@ -3125,12 +3125,14 @@
       try {
         soundLlmStart();
         startProgressBeeps();
-        await invoke('reformat_selection');
+        const result = await invoke('reformat_selection');
         stopProgressBeeps();
         soundComplete();
       } catch (e) {
         stopProgressBeeps();
+        soundError();
         console.error('Reformat failed:', e);
+        showError('Reformat: ' + (e || 'unknown error'));
       }
     });
 
