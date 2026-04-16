@@ -2298,10 +2298,15 @@ fn reformat_selection(state: State<AppState>) -> Result<String, String> {
     // physically released before we simulate Ctrl+C.
     std::thread::sleep(std::time::Duration::from_millis(150));
 
-    // 1. Save current clipboard
+    // 1. Save current clipboard, then clear it so we can detect Ctrl+C
+    //    reliably. The old comparison (`selected == old_text`) silently
+    //    fails when the clipboard already holds the same text as the
+    //    selection — common after a paste-mode dictation.
     let old_text = {
         let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
-        cb.get_text().unwrap_or_default()
+        let saved = cb.get_text().unwrap_or_default();
+        let _ = cb.set_text(String::new()); // clear
+        saved
     };
 
     // 2. Ctrl+C to grab selection
@@ -2312,12 +2317,14 @@ fn reformat_selection(state: State<AppState>) -> Result<String, String> {
     unsafe { SendInput(&copy_inputs, std::mem::size_of::<INPUT>() as i32); }
     std::thread::sleep(std::time::Duration::from_millis(300));
 
-    // 3. Read selected text
+    // 3. Read selected text — clipboard was cleared, so any content
+    //    means Ctrl+C succeeded regardless of what was there before.
     let selected = {
         let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
         cb.get_text().unwrap_or_default()
     };
-    if selected.is_empty() || selected == old_text {
+    if selected.is_empty() {
+        // Ctrl+C didn't capture anything — restore original clipboard
         if !old_text.is_empty() {
             if let Ok(mut cb) = Clipboard::new() { let _ = cb.set_text(&old_text); }
         }
