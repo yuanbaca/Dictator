@@ -48,6 +48,7 @@
     .status-dot.connecting { background: #f0a500; animation: pulse 1s infinite; }
     .status-dot.connected { background: #4ecca3; }
     .status-dot.recording { background: #e74c3c; animation: pulse 0.8s infinite; }
+    .status-dot.listening { background: #e74c3c; animation: pulse 1.2s infinite; }
     .status-dot.transcribing { background: #3498db; animation: pulse 0.5s infinite; }
     .status-dot.error { background: #e74c3c; }
 
@@ -135,6 +136,14 @@
     .transcript-area.success {
       border-color: #4ecca3;
       color: #4ecca3;
+    }
+
+    /* Live-mode transcript grows taller so the running dictation is
+       readable while the user keeps speaking. */
+    .transcript-area.live {
+      max-height: 220px;
+      text-align: left;
+      border-color: #e74c3c;
     }
 
     .toast {
@@ -302,6 +311,13 @@
       <div class="toggle on" id="autoSpaceToggle"></div>
     </div>
     <div class="setting-row">
+      <label>Live mode (continuous)</label>
+      <div class="toggle" id="liveModeToggle"></div>
+    </div>
+    <div class="setting-hint">
+      Streams audio while tapped; splits on pauses. Beta — local mic only.
+    </div>
+    <div class="setting-row">
       <label>Auto-format with AI</label>
       <div class="toggle" id="autoFormatToggle"></div>
     </div>
@@ -341,6 +357,20 @@
     const recTimerEl = document.getElementById('recTimer');
     const progressBar = document.getElementById('progressBar');
     const progressFill = document.getElementById('progressFill');
+
+    // --- Live mode state ---
+    // Live mode streams audio continuously and the server runs VAD +
+    // Whisper per utterance. Segments stream back via `live_segment`
+    // and accumulate in `liveSegments` so the transcript shows the
+    // running dictation without flicker.
+    let liveMode = false;          // setting toggle (sticky)
+    let liveActive = false;        // currently in a live session
+    let liveSegments = [];         // strings, joined for display
+    let liveAwaitingEnd = false;   // stop requested, waiting for live_ended
+
+    function isLiveModeOn() {
+      return document.getElementById('liveModeToggle').classList.contains('on');
+    }
 
     // --- Animated progress bar ---
     // Two-phase: Whisper transcription fills to ~50% (or ~90% without LLM),
@@ -539,6 +569,42 @@
           } else if (msg.state === 'failed') {
             showToast('Model download failed', 'error');
           }
+        } else if (msg.type === 'live_status') {
+          if (msg.state === 'listening') {
+            setStatus('listening', 'Live — listening');
+            micHint.textContent = 'Speak naturally. Tap again to stop.';
+          } else if (msg.state === 'formatting') {
+            setStatus('transcribing', 'AI formatting dictation...');
+            micHint.textContent = 'Formatting with AI...';
+            startFormattingProgress();
+          }
+        } else if (msg.type === 'live_segment') {
+          // Append to running transcript. Each segment is one VAD
+          // utterance; joining with " " matches how the server assembles
+          // the final text for LLM formatting.
+          liveSegments.push(msg.text);
+          transcript.textContent = liveSegments.join(' ');
+          transcript.classList.remove('empty');
+          transcript.classList.add('live');
+          transcript.scrollTop = transcript.scrollHeight;
+        } else if (msg.type === 'live_ended') {
+          completeProgress();
+          liveAwaitingEnd = false;
+          liveActive = false;
+          micBtn.classList.remove('recording');
+          micBtn.classList.remove('disabled');
+          if (msg.formatted && msg.text) {
+            // Formatted mode: show the polished version on the phone
+            // instead of the raw running transcript so the user sees
+            // what actually got injected at the cursor.
+            transcript.textContent = msg.text;
+            transcript.classList.add('success');
+            setTimeout(() => transcript.classList.remove('success'), 2000);
+          }
+          setTimeout(() => transcript.classList.remove('live'), 1500);
+          setStatus('connected', 'Ready — tap the mic');
+          micHint.textContent = 'Tap to start recording';
+          stopRecTimer();
         }
       };
 
@@ -546,6 +612,16 @@
         setStatus('error', 'Disconnected');
         micBtn.classList.add('disabled');
         micHint.textContent = 'Connection lost. Reconnecting...';
+        // Clean up any in-flight live session so we don't get stuck.
+        if (liveActive || liveAwaitingEnd) {
+          closeMic();
+          liveActive = false;
+          liveAwaitingEnd = false;
+          isRecording = false;
+          micBtn.classList.remove('recording');
+          transcript.classList.remove('live');
+          stopRecTimer();
+        }
         setTimeout(connect, 2000);
       };
 
@@ -567,35 +643,46 @@
     }
 
     // --- Audio capture ---
+    // Shared helper: open the mic and create a ScriptProcessorNode.
+    // Returns { source, recorder } for the caller to wire up.
+    async function openMic() {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+
+      audioContext = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 16000
+      });
+
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      recorder = audioContext.createScriptProcessor(4096, 1, 1);
+      source.connect(recorder);
+      recorder.connect(audioContext.destination);
+      return { source, recorder };
+    }
+
+    // Shared helper: tear down mic + AudioContext.
+    function closeMic() {
+      if (recorder) { recorder.disconnect(); recorder = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (audioContext) { audioContext.close(); audioContext = null; }
+    }
+
+    // --- Press-to-talk recording ---
     async function startRecording() {
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            sampleRate: 16000,
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-          }
-        });
-
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-          sampleRate: 16000
-        });
-
-        const source = audioContext.createMediaStreamSource(mediaStream);
-
-        // Use ScriptProcessorNode to capture raw PCM
-        // Buffer size 4096 is a good balance
-        recorder = audioContext.createScriptProcessor(4096, 1, 1);
+        await openMic();
         recordedSamples = [];
 
         recorder.onaudioprocess = (e) => {
           const data = e.inputBuffer.getChannelData(0);
           recordedSamples.push(new Float32Array(data));
         };
-
-        source.connect(recorder);
-        recorder.connect(audioContext.destination);
 
         isRecording = true;
         micBtn.classList.add('recording');
@@ -614,19 +701,7 @@
       micHint.textContent = 'Sending audio...';
       stopRecTimer();
 
-      // Stop recording
-      if (recorder) {
-        recorder.disconnect();
-        recorder = null;
-      }
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(t => t.stop());
-        mediaStream = null;
-      }
-      if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-      }
+      closeMic();
 
       // Merge all recorded chunks into a single Float32Array
       let totalLength = 0;
@@ -652,14 +727,80 @@
       recordedSamples = [];
     }
 
+    // --- Live-mode streaming ---
+    // Each onaudioprocess fires ~256 ms of f32 samples at 16 kHz.
+    // We send each chunk immediately as a binary WebSocket frame;
+    // the server feeds it to the Silero VAD, which handles
+    // endpointing and routes completed utterances to Whisper.
+    async function startLiveSession() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showToast('Not connected to desktop', 'error');
+        return;
+      }
+
+      try {
+        await openMic();
+      } catch (err) {
+        showToast('Microphone access denied. Please allow microphone access.', 'error');
+        return;
+      }
+
+      // Signal the server to spin up a LiveSessionHandle.
+      ws.send(JSON.stringify({ type: 'live_start' }));
+
+      liveSegments = [];
+      liveActive = true;
+      liveAwaitingEnd = false;
+      isRecording = true;
+      micBtn.classList.add('recording');
+      transcript.textContent = 'Listening...';
+      transcript.classList.remove('empty', 'success');
+      transcript.classList.add('live');
+      startRecTimer();
+
+      // Stream each audio buffer as it arrives.
+      recorder.onaudioprocess = (e) => {
+        if (!liveActive || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const data = e.inputBuffer.getChannelData(0);
+        // Send raw f32 LE bytes (same format as press-to-talk).
+        ws.send(new Float32Array(data).buffer);
+      };
+    }
+
+    function stopLiveSession() {
+      isRecording = false;
+      liveAwaitingEnd = true;
+      micBtn.classList.add('disabled');
+      micHint.textContent = 'Finishing up...';
+
+      closeMic();
+
+      // Tell the server to flush the VAD + drain Whisper queue.
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'live_stop' }));
+      }
+      // Don't reset liveActive yet — we wait for live_ended from the
+      // server so any in-flight segments + the LLM pass complete first.
+    }
+
     // --- Mic button ---
     micBtn.addEventListener('click', () => {
       if (micBtn.classList.contains('disabled')) return;
 
-      if (!isRecording) {
-        startRecording();
+      if (isLiveModeOn()) {
+        // Live mode: toggle start/stop of continuous streaming session.
+        if (!liveActive) {
+          startLiveSession();
+        } else {
+          stopLiveSession();
+        }
       } else {
-        stopRecording();
+        // Press-to-talk: existing behavior.
+        if (!isRecording) {
+          startRecording();
+        } else {
+          stopRecording();
+        }
       }
     });
 
@@ -687,6 +828,19 @@
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'set_auto_space', enabled: isOn }));
       }
+    });
+
+    // --- Live mode toggle ---
+    const liveModeToggle = document.getElementById('liveModeToggle');
+
+    liveModeToggle.addEventListener('click', () => {
+      // Don't allow toggling mid-session — that would be confusing.
+      if (liveActive || isRecording) return;
+      liveModeToggle.classList.toggle('on');
+      liveMode = isLiveModeOn();
+      micHint.textContent = liveMode
+        ? 'Tap to start live dictation'
+        : 'Tap to start recording';
     });
 
     // --- Auto-format toggle ---
