@@ -41,10 +41,25 @@ pub enum LiveEvent {
 
 /// Producer-facing handle to a running session.
 pub struct LiveSessionHandle {
-    /// Send mono f32 samples at 16 kHz in any chunk size. Drop to end session.
+    /// Send mono f32 samples at 16 kHz in any chunk size. Drop (or call
+    /// `end_input`) to signal the end of the audio stream.
     pub frame_tx: mpsc::UnboundedSender<Vec<f32>>,
     /// Pull transcription events.
     pub event_rx: mpsc::UnboundedReceiver<LiveEvent>,
+}
+
+impl LiveSessionHandle {
+    /// Signal the session to flush and wind down. Replaces the audio sender
+    /// with one whose receiver has already been dropped, so the session's
+    /// recv() sees no more senders, completes, flushes any in-progress
+    /// utterance through Whisper, and emits `LiveEvent::Ended`.
+    ///
+    /// Keep the handle around after calling this so you can still drain
+    /// events from `event_rx`.
+    pub fn end_input(&mut self) {
+        let (dead, _) = mpsc::unbounded_channel::<Vec<f32>>();
+        self.frame_tx = dead;
+    }
 }
 
 /// Spawn a live session. Runs until the caller drops `frame_tx`.

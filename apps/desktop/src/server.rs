@@ -1,9 +1,11 @@
 //! Embedded web server that serves the phone companion and handles WebSocket audio.
 
 use crate::injection::{self, InjectionMode};
+use crate::live::{self, LiveEvent, LiveSessionHandle};
 use crate::llm;
 use crate::templates::FormatType;
 use crate::transcription;
+use crate::word_bank;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::WebSocketUpgrade;
 use axum::response::{Html, Json};
@@ -168,16 +170,73 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
         ))
         .await;
 
-    while let Some(msg) = socket.recv().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(e) => {
+    // Per-connection live-mode state. `live` is Some while a live session is
+    // active; binary frames in that state are interpreted as streamed audio
+    // for VAD, not complete utterances for press-to-talk. `live_buffer` holds
+    // the raw Whisper text of each segment so we can replay the whole dictation
+    // through the LLM on stop (when a format is selected) and ship one tidy
+    // history entry per session instead of one per pause.
+    let mut live: Option<LiveSessionHandle> = None;
+    let mut live_buffer: Vec<String> = Vec::new();
+    let mut live_seg_idx: u32 = 0;
+    let mut live_auto_format = false;
+    let mut live_format_type: FormatType = FormatType::None;
+
+    loop {
+        // Select between WebSocket input and live session events. When no
+        // live session is running, the live branch parks on a pending future
+        // that never resolves — effectively disabled.
+        let maybe_ws = socket.recv();
+        let maybe_live = async {
+            match live.as_mut() {
+                Some(h) => h.event_rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
+        let next = tokio::select! {
+            ws_msg = maybe_ws => WsOrLive::Ws(ws_msg),
+            live_ev = maybe_live => WsOrLive::Live(live_ev),
+        };
+
+        let msg = match next {
+            WsOrLive::Ws(Some(Ok(m))) => m,
+            WsOrLive::Ws(Some(Err(e))) => {
                 eprintln!("WebSocket error: {e}");
                 break;
+            }
+            WsOrLive::Ws(None) => break,
+            WsOrLive::Live(Some(event)) => {
+                handle_live_event(
+                    &mut socket,
+                    &state,
+                    event,
+                    &mut live,
+                    &mut live_buffer,
+                    &mut live_seg_idx,
+                    live_auto_format,
+                    live_format_type,
+                )
+                .await;
+                continue;
+            }
+            WsOrLive::Live(None) => {
+                // Session's event channel closed without Ended — treat as ended.
+                live = None;
+                continue;
             }
         };
 
         match msg {
+            Message::Binary(audio_data) if live.is_some() => {
+                // Live mode: stream the samples straight into the VAD. No
+                // progress reporting per-frame — endpointing emits segments
+                // naturally via the live event channel.
+                let samples = bytes_to_f32_samples(&audio_data);
+                if let Some(h) = &live {
+                    let _ = h.frame_tx.send(samples);
+                }
+            }
             Message::Binary(audio_data) => {
                 let duration_secs = audio_data.len() as f64 / (16000.0 * 4.0);
                 eprintln!(
@@ -505,6 +564,68 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                                 eprintln!("TTS read-aloud triggered from phone");
                             }
                         }
+                        Some("live_start") => {
+                            if live.is_some() {
+                                // Already live — ignore duplicate starts.
+                                continue;
+                            }
+                            // Snapshot the format state at the start of the
+                            // session so toggling it mid-dictation doesn't
+                            // cause confusing mid-flight behavior changes.
+                            live_auto_format = *state.auto_format.lock().unwrap();
+                            live_format_type = {
+                                let s = state.auto_format_type.lock().unwrap().clone();
+                                serde_json::from_value::<FormatType>(
+                                    serde_json::Value::String(s),
+                                )
+                                .unwrap_or(FormatType::None)
+                            };
+                            live_buffer.clear();
+                            live_seg_idx = 0;
+
+                            match live::spawn(state.transcriber.clone()) {
+                                Ok(handle) => {
+                                    live = Some(handle);
+                                    eprintln!(
+                                        "Live mode: session started (auto_format={live_auto_format}, type={live_format_type:?})"
+                                    );
+                                    let _ = socket
+                                        .send(Message::Text(
+                                            serde_json::json!({
+                                                "type": "live_status",
+                                                "state": "listening"
+                                            })
+                                            .to_string()
+                                            .into(),
+                                        ))
+                                        .await;
+                                }
+                                Err(e) => {
+                                    eprintln!("Live mode: failed to start session: {e}");
+                                    let _ = socket
+                                        .send(Message::Text(
+                                            serde_json::json!({
+                                                "type": "error",
+                                                "message": format!("Live mode unavailable: {e}")
+                                            })
+                                            .to_string()
+                                            .into(),
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
+                        Some("live_stop") => {
+                            // Signal the session to flush. We leave `live`
+                            // populated so we keep draining its event_rx
+                            // until `LiveEvent::Ended` comes through; that's
+                            // where we assemble the final text, run the LLM
+                            // if needed, and reset state.
+                            if let Some(h) = live.as_mut() {
+                                h.end_input();
+                                eprintln!("Live mode: end_input signaled");
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -517,6 +638,211 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
     eprintln!("Phone disconnected");
     let mut count = state.connected_phones.lock().unwrap();
     *count = count.saturating_sub(1);
+}
+
+/// Internal dispatch helper for the `handle_ws` select loop: distinguishes
+/// the two event sources so we can match them once outside the select. Both
+/// variants preserve the stream-terminated case (`None`) so we can break or
+/// clear state.
+enum WsOrLive {
+    Ws(Option<Result<Message, axum::Error>>),
+    Live(Option<LiveEvent>),
+}
+
+/// Process one event from the live session.
+///
+/// Each utterance emitted by the VAD flows through here: we apply the
+/// user's word bank, notify the phone, and either inject the raw segment
+/// (no-format mode) or stash it in `live_buffer` for a single LLM pass
+/// on `Ended` (formatted modes — the dictator-app preview panel can
+/// subscribe to `live_segment` for visual feedback in the meantime).
+///
+/// On `Ended` we flush state: drop the handle, clear the buffer, reset the
+/// segment index. The caller's `live_auto_format`/`live_format_type` were
+/// snapshotted at `live_start` and don't need resetting — they'll be
+/// re-captured on the next start.
+#[allow(clippy::too_many_arguments)]
+async fn handle_live_event(
+    socket: &mut WebSocket,
+    state: &Arc<ServerState>,
+    event: LiveEvent,
+    live: &mut Option<LiveSessionHandle>,
+    live_buffer: &mut Vec<String>,
+    live_seg_idx: &mut u32,
+    live_auto_format: bool,
+    live_format_type: FormatType,
+) {
+    match event {
+        LiveEvent::SegmentStart => {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"type": "live_status", "state": "listening"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+        }
+        LiveEvent::Segment { text, duration_ms } => {
+            // Word-bank correction: same pipeline as press-to-talk so
+            // custom vocab fixes (Claude/clod, GitHub/get hub, …) apply in
+            // live mode too.
+            let bank = word_bank::load();
+            let corrected = word_bank::apply(&text, &bank);
+            let trimmed = corrected.trim().to_string();
+            if trimmed.is_empty() {
+                return;
+            }
+
+            let idx = *live_seg_idx;
+            *live_seg_idx += 1;
+            live_buffer.push(trimmed.clone());
+
+            eprintln!("Live segment #{idx}: \"{trimmed}\" ({duration_ms} ms)");
+
+            // Notify the phone so its UI can show the running transcript.
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({
+                        "type": "live_segment",
+                        "index": idx,
+                        "text": trimmed,
+                        "duration_ms": duration_ms,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await;
+
+            // Inject per segment only when no format is requested. With a
+            // format selected we defer injection until `Ended` so the LLM
+            // sees the whole dictation, which is the whole reason for
+            // formatted modes — cleaning one utterance at a time would
+            // lose context and produce choppy output.
+            let will_format = live_auto_format && live_format_type != FormatType::None;
+            if !will_format {
+                let mut out = trimmed;
+                if *state.auto_space.lock().unwrap() {
+                    out.push(' ');
+                }
+                let mode_str = state.injection_mode.lock().unwrap().clone();
+                let mode = match mode_str.as_str() {
+                    "type" => InjectionMode::Type,
+                    _ => InjectionMode::Paste,
+                };
+                if let Err(e) = injection::inject_text(&out, mode) {
+                    eprintln!("Live segment inject failed: {e}");
+                }
+            }
+        }
+        LiveEvent::SegmentError(msg) => {
+            eprintln!("Live segment error: {msg}");
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({
+                        "type": "error",
+                        "message": format!("Live segment: {msg}")
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await;
+        }
+        LiveEvent::Ended => {
+            // Join segments with a single space — each segment was already
+            // trimmed before being pushed, so no double-spaces.
+            let combined = live_buffer.join(" ").trim().to_string();
+            let will_format = live_auto_format && live_format_type != FormatType::None;
+
+            let final_text = if will_format && !combined.is_empty() {
+                let _ = socket
+                    .send(Message::Text(
+                        serde_json::json!({"type": "live_status", "state": "formatting"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+
+                let formatter = state.formatter.clone();
+                let fc = *state.force_cpu.lock().unwrap();
+                let raw = combined.clone();
+                let ft = live_format_type;
+                let formatted = tokio::task::spawn_blocking(move || {
+                    let mut guard = formatter.lock().unwrap();
+                    if guard.is_none() {
+                        if let Some(path) = llm::find_llm_model_path() {
+                            match llm::Formatter::new(&path, fc) {
+                                Ok(f) => *guard = Some(f),
+                                Err(e) => return Err(format!("{e}")),
+                            }
+                        } else {
+                            return Err("No LLM model found".into());
+                        }
+                    }
+                    guard
+                        .as_ref()
+                        .unwrap()
+                        .format_text(&raw, ft)
+                        .map_err(|e| format!("{e}"))
+                })
+                .await;
+
+                match formatted {
+                    Ok(Ok(t)) => t,
+                    Ok(Err(e)) => {
+                        eprintln!("Live auto-format failed, using raw text: {e}");
+                        combined.clone()
+                    }
+                    Err(e) => {
+                        eprintln!("Live auto-format task failed, using raw text: {e}");
+                        combined.clone()
+                    }
+                }
+            } else {
+                combined
+            };
+
+            // In formatted mode segments were held back — inject the
+            // polished text now. In non-formatted mode segments were
+            // already injected as they arrived, so skip.
+            if will_format && !final_text.is_empty() {
+                let mut out = final_text.clone();
+                if *state.auto_space.lock().unwrap() {
+                    out.push(' ');
+                }
+                let mode_str = state.injection_mode.lock().unwrap().clone();
+                let mode = match mode_str.as_str() {
+                    "type" => InjectionMode::Type,
+                    _ => InjectionMode::Paste,
+                };
+                if let Err(e) = injection::inject_text(&out, mode) {
+                    eprintln!("Live final inject failed: {e}");
+                }
+            }
+
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({
+                        "type": "live_ended",
+                        "text": final_text,
+                        "formatted": will_format,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await;
+
+            eprintln!(
+                "Live mode: session ended ({} segments, {} chars final)",
+                live_buffer.len(),
+                final_text.len()
+            );
+
+            // Reset per-session state so the next live_start starts clean.
+            live_buffer.clear();
+            *live_seg_idx = 0;
+            *live = None;
+        }
+    }
 }
 
 /// Convert raw bytes (little-endian f32) to Vec<f32>.
