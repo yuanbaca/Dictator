@@ -585,8 +585,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                             live_buffer.clear();
                             live_seg_idx = 0;
 
-                            let cross_ctx = *state.live_context.lock().unwrap();
-                            match live::spawn(state.transcriber.clone(), cross_ctx) {
+                            match live::spawn(state.transcriber.clone(), true) {
                                 Ok(handle) => {
                                     live = Some(handle);
                                     eprintln!(

@@ -845,10 +845,9 @@ async fn start_live_session(
         }
     }
 
-    // Spawn the VAD + Whisper pipeline.
-    let cross_ctx = *state.live_context.lock().unwrap();
+    // Spawn the VAD + Whisper pipeline (cross-segment context always on).
     let live::LiveSessionHandle { frame_tx, mut event_rx } =
-        live::spawn(state.transcriber.clone(), cross_ctx)
+        live::spawn(state.transcriber.clone(), true)
             .map_err(|e| format!("Failed to start live session: {e}"))?;
 
     // Start mic capture, feeding audio into the pipeline.

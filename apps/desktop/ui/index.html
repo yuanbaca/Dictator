@@ -1255,22 +1255,6 @@
         </div>
 
         <div class="setting-row">
-          <label>Live mode (beta)</label>
-          <div class="toggle" id="liveModeToggle"></div>
-        </div>
-        <div id="liveModeHint" style="display:none; font-size:11px; color:var(--text-muted); margin:-10px 0 12px;">
-          Streams from your desktop mic. VAD splits on pauses. Click mic to start/stop.
-        </div>
-
-        <div class="setting-row" id="liveContextRow" style="display:none; padding-left:18px;">
-          <label>Segment context</label>
-          <div class="toggle on" id="liveContextToggle"></div>
-        </div>
-        <div id="liveContextHint" style="display:none; font-size:11px; color:var(--text-muted); margin:-10px 0 12px; padding-left:18px;">
-          Feeds previous segment text into Whisper for better continuity across pauses.
-        </div>
-
-        <div class="setting-row">
           <label>Start on boot</label>
           <div class="toggle" id="autostartToggle"></div>
         </div>
@@ -1719,52 +1703,10 @@
       }
     });
 
-    // ── Live mode state ──────────────────────────────────────────────────
-    let liveMode = localStorage.getItem('dictator-live-mode') === 'true';
+    // ── Live mode state (hidden from UI, kept for internal code paths) ──
+    let liveMode = false; // disabled — feature is shelved
     let liveActive = false;
     let liveSegments = [];
-
-    const liveModeToggle = document.getElementById('liveModeToggle');
-    const liveModeHint = document.getElementById('liveModeHint');
-    if (liveMode) {
-      liveModeToggle.classList.add('on');
-      liveModeHint.style.display = '';
-      document.getElementById('liveContextRow').style.display = '';
-    }
-
-    liveModeToggle.addEventListener('click', () => {
-      if (isRecording || liveActive) return; // no toggle mid-session
-      liveMode = !liveMode;
-      liveModeToggle.classList.toggle('on', liveMode);
-      liveModeHint.style.display = liveMode ? '' : 'none';
-      liveContextRow.style.display = liveMode ? '' : 'none';
-      liveContextHint.style.display = liveMode && liveContextToggle.classList.contains('on') ? '' : 'none';
-      localStorage.setItem('dictator-live-mode', liveMode);
-      micHint.textContent = liveMode
-        ? 'Click to start live dictation'
-        : 'Click to start recording';
-    });
-
-    // ── Segment context sub-toggle ───────────────────────────────────────
-    const liveContextToggle = document.getElementById('liveContextToggle');
-    const liveContextRow = document.getElementById('liveContextRow');
-    const liveContextHint = document.getElementById('liveContextHint');
-
-    // Init from backend (default on)
-    invoke('get_live_context').then(on => {
-      liveContextToggle.classList.toggle('on', on);
-      if (liveMode) {
-        liveContextRow.style.display = '';
-        liveContextHint.style.display = on ? '' : 'none';
-      }
-    });
-
-    liveContextToggle.addEventListener('click', async () => {
-      if (liveActive) return; // no toggle mid-session
-      const isOn = liveContextToggle.classList.toggle('on');
-      liveContextHint.style.display = isOn ? '' : 'none';
-      await invoke('set_live_context', { enabled: isOn });
-    });
 
     // ── Global Escape shortcut management ───────────────────────────────
     // Escape is registered as a global hotkey only while recording or TTS
@@ -4154,7 +4096,7 @@
         if (gpu.llm_gpu_capable === false) {
           gpuEl.textContent = 'Whisper on GPU · LLM on CPU';
         } else {
-          gpuEl.textContent = 'Whisper on GPU · LLM loading…';
+          gpuEl.textContent = 'Whisper on GPU · LLM loads on first use';
         }
         gpuEl.className = 'info-text accent';
         if (gpu.gpu_summary) gpuEl.title = gpu.gpu_summary;
@@ -4174,7 +4116,7 @@
         if (gpu.llm_gpu_capable === false) {
           gpuEl.textContent = 'Running on CPU';
         } else {
-          gpuEl.textContent = 'Whisper on CPU · LLM loading…';
+          gpuEl.textContent = 'Whisper on CPU · LLM loads on first use';
         }
         gpuEl.className = 'info-text muted';
       } else if (gpu.whisper_gpu === false) {
