@@ -3032,8 +3032,32 @@ fn main() {
             // index 10 when visible).
             let fmt_items_visible_rec = fmt_items_visible.clone();
 
-            let _tray = tauri::tray::TrayIconBuilder::new()
-                .icon(app.default_window_icon().expect("Missing app icon").clone())
+            // Precompute idle (green) and recording (red) tray icons. The red
+            // variant is generated from the default icon by swapping the R and
+            // G channels per pixel — the cap goes green→red while yellow
+            // accents and transparency stay intact.
+            //
+            // We rebuild both as owned `'static` images so they can be moved
+            // into the recording-state-changed listener closure without
+            // dragging `app`'s lifetime with them.
+            let default_icon_ref = app
+                .default_window_icon()
+                .expect("Missing app icon");
+            let icon_width = default_icon_ref.width();
+            let icon_height = default_icon_ref.height();
+            let idle_rgba: Vec<u8> = default_icon_ref.rgba().to_vec();
+            let idle_icon: tauri::image::Image<'static> =
+                tauri::image::Image::new_owned(idle_rgba.clone(), icon_width, icon_height);
+            let recording_icon: tauri::image::Image<'static> = {
+                let mut rgba = idle_rgba;
+                for px in rgba.chunks_exact_mut(4) {
+                    px.swap(0, 1);
+                }
+                tauri::image::Image::new_owned(rgba, icon_width, icon_height)
+            };
+
+            let tray = tauri::tray::TrayIconBuilder::new()
+                .icon(idle_icon.clone())
                 .tooltip("Dictator")
                 .menu(&tray_menu)
                 .on_menu_event(move |app, event| {
@@ -3243,8 +3267,18 @@ fn main() {
                 let cancel_sep_dyn = sep1.clone();
                 let cancel_rec_dyn = cancel_rec_item.clone();
                 let tray_menu_dyn = tray_menu.clone();
+                let tray_for_icon = tray.clone();
+                let idle_icon_for_listener = idle_icon.clone();
+                let recording_icon_for_listener = recording_icon.clone();
                 app.listen("recording-state-changed", move |event| {
                     let recording = event.payload().trim_matches('"') == "true";
+                    // Swap tray icon: red while recording, green while idle.
+                    let icon = if recording {
+                        recording_icon_for_listener.clone()
+                    } else {
+                        idle_icon_for_listener.clone()
+                    };
+                    let _ = tray_for_icon.set_icon(Some(icon));
                     if recording {
                         let fmt_visible = fmt_items_visible_rec
                             .load(std::sync::atomic::Ordering::SeqCst);
