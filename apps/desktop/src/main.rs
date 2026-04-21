@@ -79,6 +79,8 @@ struct AppState {
     tts_hotkey: Mutex<String>,
     /// Reformat-selection hotkey preset
     reformat_hotkey: Mutex<String>,
+    /// Copy-last-transcription-to-clipboard hotkey preset
+    copy_hotkey: Mutex<String>,
     /// SAPI TTS speaker (lazy-loaded on first speak)
     speaker: Arc<Mutex<Option<tts::SapiSpeaker>>>,
     /// Piper TTS speaker (neural voices)
@@ -1169,6 +1171,7 @@ fn register_all_hotkeys(
     inject_preset: &str,
     tts_preset: &str,
     reformat_preset: &str,
+    copy_preset: &str,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -1198,15 +1201,22 @@ fn register_all_hotkeys(
             .register(sc)
             .map_err(|e| format!("Failed to register reformat hotkey: {e}"))?;
     }
+    if let Some(sc) = parse_hotkey_preset(copy_preset) {
+        app_handle
+            .global_shortcut()
+            .register(sc)
+            .map_err(|e| format!("Failed to register copy-to-clipboard hotkey: {e}"))?;
+    }
     Ok(())
 }
 
-fn get_all_hotkey_presets(state: &AppState) -> (String, String, String, String) {
+fn get_all_hotkey_presets(state: &AppState) -> (String, String, String, String, String) {
     let rec = state.hotkey.lock().unwrap().clone();
     let inject = state.inject_hotkey.lock().unwrap().clone();
     let tts = state.tts_hotkey.lock().unwrap().clone();
     let reformat = state.reformat_hotkey.lock().unwrap().clone();
-    (rec, inject, tts, reformat)
+    let copy = state.copy_hotkey.lock().unwrap().clone();
+    (rec, inject, tts, reformat, copy)
 }
 
 #[tauri::command]
@@ -1215,8 +1225,8 @@ fn set_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (_, inject, tts, reformat) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &preset, &inject, &tts, &reformat)?;
+    let (_, inject, tts, reformat, copy) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &preset, &inject, &tts, &reformat, &copy)?;
     *state.hotkey.lock().unwrap() = preset;
     Ok(())
 }
@@ -1227,8 +1237,8 @@ fn set_inject_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (rec, _, tts, reformat) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &rec, &preset, &tts, &reformat)?;
+    let (rec, _, tts, reformat, copy) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &preset, &tts, &reformat, &copy)?;
     *state.inject_hotkey.lock().unwrap() = preset;
     Ok(())
 }
@@ -1244,8 +1254,8 @@ fn set_tts_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (rec, inject, _, reformat) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &rec, &inject, &preset, &reformat)?;
+    let (rec, inject, _, reformat, copy) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &inject, &preset, &reformat, &copy)?;
     *state.tts_hotkey.lock().unwrap() = preset;
     Ok(())
 }
@@ -1261,9 +1271,38 @@ fn set_reformat_hotkey(
     state: State<AppState>,
     preset: String,
 ) -> Result<(), String> {
-    let (rec, inject, tts, _) = get_all_hotkey_presets(&state);
-    register_all_hotkeys(&app_handle, &rec, &inject, &tts, &preset)?;
+    let (rec, inject, tts, _, copy) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &inject, &tts, &preset, &copy)?;
     *state.reformat_hotkey.lock().unwrap() = preset;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_copy_hotkey(state: State<AppState>) -> String {
+    state.copy_hotkey.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_copy_hotkey(
+    app_handle: tauri::AppHandle,
+    state: State<AppState>,
+    preset: String,
+) -> Result<(), String> {
+    let (rec, inject, tts, reformat, _) = get_all_hotkey_presets(&state);
+    register_all_hotkeys(&app_handle, &rec, &inject, &tts, &reformat, &preset)?;
+    *state.copy_hotkey.lock().unwrap() = preset;
+    Ok(())
+}
+
+/// Put arbitrary text onto the system clipboard. Used by the "copy last
+/// transcription" hotkey for apps like RustDesk that block SendInput
+/// injection but accept manual Ctrl+V paste.
+#[tauri::command]
+fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    use arboard::Clipboard;
+    let mut cb = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
+    cb.set_text(text)
+        .map_err(|e| format!("Clipboard error: {e}"))?;
     Ok(())
 }
 
@@ -2523,6 +2562,9 @@ fn main() {
                             let reformat_key = state.as_ref().and_then(|s| {
                                 parse_hotkey_preset(&s.reformat_hotkey.lock().unwrap())
                             });
+                            let copy_key = state.as_ref().and_then(|s| {
+                                parse_hotkey_preset(&s.copy_hotkey.lock().unwrap())
+                            });
 
                             if inject_key.is_some_and(|k| k == *shortcut) {
                                 let _ = win.emit("inject-at-cursor", ());
@@ -2530,6 +2572,8 @@ fn main() {
                                 let _ = win.emit("tts-read-aloud", ());
                             } else if reformat_key.is_some_and(|k| k == *shortcut) {
                                 let _ = win.emit("reformat-selection", ());
+                            } else if copy_key.is_some_and(|k| k == *shortcut) {
+                                let _ = win.emit("copy-last-to-clipboard", ());
                             } else {
                                 let _ = win.emit("toggle-recording", ());
                             }
@@ -2558,6 +2602,7 @@ fn main() {
             inject_hotkey: Mutex::new("none".into()),
             tts_hotkey: Mutex::new("none".into()),
             reformat_hotkey: Mutex::new("none".into()),
+            copy_hotkey: Mutex::new("none".into()),
             speaker: Arc::new(Mutex::new(None)),
             piper: Arc::new(tts::PiperSpeaker::new(
                 model_manager::models_dir().join("piper"),
@@ -2637,6 +2682,9 @@ fn main() {
             set_tts_hotkey,
             get_reformat_hotkey,
             set_reformat_hotkey,
+            get_copy_hotkey,
+            set_copy_hotkey,
+            copy_text_to_clipboard,
             reformat_selection,
             speak_text,
             stop_speaking,

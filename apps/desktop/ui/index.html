@@ -1184,6 +1184,24 @@
           Highlight text anywhere, press hotkey to reformat with AI
         </div>
 
+        <div class="setting-group">
+          <label>Copy last transcription to clipboard</label>
+          <select id="copyHotkeySelect">
+            <option value="none">Disabled</option>
+            <option value="Ctrl+Shift+C">Ctrl + Shift + C</option>
+            <option value="Ctrl+Shift+X">Ctrl + Shift + X</option>
+            <option value="F11">F11</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <div id="copyHotkeyCustomRow" style="display:none; margin-top:6px;">
+            <input id="copyHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+          </div>
+        </div>
+        <div id="copyHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
+          Puts the most recent transcription on the clipboard — useful for apps that block direct injection (RustDesk, etc.). Then press Ctrl+V where you want it.
+        </div>
+
         <div id="ttsEngineGroup" class="setting-group" style="display:none;">
           <label>Voice engine</label>
           <select id="ttsEngineSelect">
@@ -3121,6 +3139,30 @@
       reformatHint.style.display = reformatHotkeySelect.value !== 'none' ? 'block' : 'none';
     });
 
+    // ── Copy Last Transcription to Clipboard ──────────────────────────
+    const copyHotkeySelect = document.getElementById('copyHotkeySelect');
+    const copyHint = document.getElementById('copyHint');
+    setupHotkeySelect(copyHotkeySelect, 'copyHotkeyCustomRow', 'copyHotkeyCustomInput', 'dictator-copy-hotkey', 'set_copy_hotkey');
+
+    copyHotkeySelect.addEventListener('change', () => {
+      copyHint.style.display = copyHotkeySelect.value !== 'none' ? 'block' : 'none';
+    });
+
+    listen('copy-last-to-clipboard', async () => {
+      if (!currentText) {
+        soundError();
+        showError('No transcription to copy yet');
+        return;
+      }
+      try {
+        await invoke('copy_text_to_clipboard', { text: currentText });
+        soundComplete();
+      } catch (e) {
+        soundError();
+        showError('Copy failed: ' + (e || 'unknown error'));
+      }
+    });
+
     listen('reformat-selection', async () => {
       try {
         soundLlmStart();
@@ -4345,6 +4387,16 @@
         reformatHint.style.display = 'block';
         try {
           await invoke('set_reformat_hotkey', { preset: savedReformat });
+        } catch (e) { /* ignore */ }
+      }
+
+      // Restore copy-to-clipboard hotkey
+      const savedCopy = localStorage.getItem('dictator-copy-hotkey') || 'none';
+      restoreHotkeySelect(copyHotkeySelect, 'copyHotkeyCustomRow', 'copyHotkeyCustomInput', savedCopy);
+      if (savedCopy !== 'none') {
+        copyHint.style.display = 'block';
+        try {
+          await invoke('set_copy_hotkey', { preset: savedCopy });
         } catch (e) { /* ignore */ }
       }
     }
