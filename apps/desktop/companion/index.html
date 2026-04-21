@@ -261,6 +261,7 @@
       flex-shrink: 0;
     }
     .toggle.on { background: #4ecca3; }
+    .toggle.disabled { opacity: 0.4; cursor: not-allowed; }
     .toggle::after {
       content: '';
       position: absolute;
@@ -314,8 +315,8 @@
       <label>Live mode (continuous)</label>
       <div class="toggle" id="liveModeToggle"></div>
     </div>
-    <div class="setting-hint">
-      Streams audio while tapped; splits on pauses. Beta — local mic only.
+    <div class="setting-hint" id="liveModeHint">
+      Streams audio continuously; auto-splits on pauses. Beta — quality varies.
     </div>
     <div class="setting-row">
       <label>Auto-format with AI</label>
@@ -487,6 +488,12 @@
 
       ws.onopen = () => {
         setStatus('connected', 'Connected to desktop');
+        // Re-check GPU availability on every (re)connect — the user may
+        // have toggled Free GPU or restarted the desktop app since our
+        // last fetch, and live mode's availability needs to reflect that.
+        if (typeof refreshDesktopGpuStatus === 'function') {
+          refreshDesktopGpuStatus();
+        }
       };
 
       ws.onmessage = (event) => {
@@ -831,17 +838,68 @@
     });
 
     // --- Live mode toggle ---
+    // Continuous streaming is GPU-bound: the desktop has to run Whisper on
+    // every utterance in near-real-time, plus (if auto-format is on) the LLM
+    // pass after each one. On a CPU-only desktop this falls apart — a second
+    // of speech can take several seconds to transcribe, segments pile up
+    // behind each other, and the UI misleads the user into thinking the
+    // feature is broken. Rather than ship that bad experience, we disable
+    // the toggle when the desktop reports no GPU.
     const liveModeToggle = document.getElementById('liveModeToggle');
+    const liveModeHint = document.getElementById('liveModeHint');
+    let desktopHasGpu = null; // null = unknown, true/false once /api/info responds
+
+    function applyLiveModeAvailability() {
+      if (desktopHasGpu === false) {
+        // Force off + visually disable
+        if (liveActive || isRecording) return; // don't yank mid-session
+        liveModeToggle.classList.remove('on');
+        liveMode = false;
+        liveModeToggle.classList.add('disabled');
+        liveModeHint.textContent = 'Unavailable: the desktop is running on CPU. Live mode needs GPU acceleration to keep up.';
+      } else {
+        liveModeToggle.classList.remove('disabled');
+        liveModeHint.textContent = 'Streams audio continuously; auto-splits on pauses. Beta — quality varies.';
+      }
+    }
+
+    async function refreshDesktopGpuStatus() {
+      try {
+        const resp = await fetch('/api/info', { cache: 'no-store' });
+        const data = await resp.json();
+        // `data.gpu` is null while the Whisper model is still loading;
+        // treat that as unknown (don't disable yet) and retry shortly.
+        if (data.gpu === null || data.gpu === undefined) {
+          desktopHasGpu = null;
+          setTimeout(refreshDesktopGpuStatus, 2000);
+        } else {
+          desktopHasGpu = Boolean(data.gpu);
+        }
+      } catch (_) {
+        // Best effort — if the endpoint isn't reachable we just leave
+        // the toggle enabled rather than lock users out on a network blip.
+        desktopHasGpu = null;
+      }
+      applyLiveModeAvailability();
+    }
 
     liveModeToggle.addEventListener('click', () => {
       // Don't allow toggling mid-session — that would be confusing.
       if (liveActive || isRecording) return;
+      // GPU gate: silently ignore clicks when unavailable.
+      if (desktopHasGpu === false) {
+        showToast('Live mode needs GPU on the desktop', 'error');
+        return;
+      }
       liveModeToggle.classList.toggle('on');
       liveMode = isLiveModeOn();
       micHint.textContent = liveMode
         ? 'Tap to start live dictation'
         : 'Tap to start recording';
     });
+
+    // Initial check, plus re-check any time the WebSocket reconnects.
+    refreshDesktopGpuStatus();
 
     // --- Auto-format toggle ---
     const autoFormatToggle = document.getElementById('autoFormatToggle');

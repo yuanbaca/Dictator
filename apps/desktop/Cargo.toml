@@ -1,6 +1,6 @@
 [package]
 name = "dictator"
-version = "0.5.0+6"
+version = "0.5.0+7"
 edition = "2024"
 default-run = "dictator"
 
