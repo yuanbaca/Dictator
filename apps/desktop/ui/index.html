@@ -3894,13 +3894,25 @@
 
     micDevice.addEventListener('change', async () => {
       const device = micDevice.value || null;
+      // Persist across restarts. Empty string = system default.
+      localStorage.setItem('dictator-mic-device', device || '');
       await invoke('set_selected_device', { device });
     });
 
     async function loadAudioDevices() {
       try {
         const devices = await invoke('list_audio_devices');
-        const selected = await invoke('get_selected_device');
+        // Prefer the persisted choice; fall back to whatever Rust has in
+        // memory (which will be None on a fresh start).
+        const persisted = localStorage.getItem('dictator-mic-device') || '';
+        const inMemory = await invoke('get_selected_device');
+        const selected = persisted || inMemory;
+        // If the persisted device is present in the device list, push it
+        // back into Rust state so recordings use it without requiring the
+        // user to re-pick it from the dropdown.
+        if (persisted && devices.includes(persisted) && persisted !== inMemory) {
+          await invoke('set_selected_device', { device: persisted });
+        }
         for (const name of devices) {
           const opt = document.createElement('option');
           opt.value = name;
