@@ -1108,6 +1108,14 @@
         </div>
 
         <div class="setting-group">
+          <label>LAN server (phone as mic)</label>
+          <div class="toggle" id="lanServerToggle"></div>
+        </div>
+        <div id="lanServerHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px;">
+          Off by default. Turn on to let your phone connect over Wi-Fi. With this off, Dictator runs fully local with no open ports.
+        </div>
+
+        <div class="setting-group">
           <label>Tailscale (remote access)</label>
           <div class="toggle" id="tailscaleToggle"></div>
         </div>
@@ -3975,7 +3983,7 @@
     async function loadServerInfo() {
       try {
         const url = await invoke('get_server_url');
-        if (url) lanUrlEl.textContent = url;
+        lanUrlEl.textContent = url || 'LAN server is off';
       } catch (e) {
         lanUrlEl.textContent = 'Not available';
       }
@@ -4415,6 +4423,84 @@
     applyTheme(localStorage.getItem('dictator-theme') || 'dictator-dark');
     init();
     loadServerInfo();
+
+    // ── LAN server toggle ──────────────────────────────────────────────
+    // Off by default on fresh installs so the app runs fully local with no
+    // open ports. User must opt in to phone-as-mic by flipping this switch.
+    const lanServerToggle = document.getElementById('lanServerToggle');
+    let lanServerEnabled = localStorage.getItem('dictator-lan-server') === 'true';
+
+    function applyLanServerUI() {
+      if (lanServerEnabled) {
+        lanServerToggle.classList.add('on');
+      } else {
+        lanServerToggle.classList.remove('on');
+      }
+    }
+
+    async function startLanServerWithRetryUI() {
+      try {
+        const url = await invoke('start_lan_server');
+        lanUrlEl.textContent = url;
+        return true;
+      } catch (e) {
+        showError('LAN server start failed: ' + (e || 'unknown'));
+        return false;
+      }
+    }
+
+    async function stopLanServerUI() {
+      try {
+        await invoke('stop_lan_server');
+        lanUrlEl.textContent = 'LAN server is off';
+      } catch (e) {
+        // Best effort — show error but still let the UI reflect the user's intent.
+        console.warn('stop_lan_server failed:', e);
+      }
+    }
+
+    lanServerToggle.addEventListener('click', async () => {
+      if (!lanServerEnabled) {
+        lanServerEnabled = true;
+        applyLanServerUI();
+        const ok = await startLanServerWithRetryUI();
+        if (!ok) {
+          lanServerEnabled = false;
+          applyLanServerUI();
+        }
+      } else {
+        lanServerEnabled = false;
+        applyLanServerUI();
+        await stopLanServerUI();
+      }
+      localStorage.setItem('dictator-lan-server', lanServerEnabled ? 'true' : 'false');
+    });
+
+    applyLanServerUI();
+    // Restore previous choice: start server if user had it on last session.
+    if (lanServerEnabled) {
+      startLanServerWithRetryUI().then(ok => {
+        if (!ok) {
+          lanServerEnabled = false;
+          applyLanServerUI();
+          localStorage.setItem('dictator-lan-server', 'false');
+        }
+      });
+    }
+
+    // If the server exits for any reason (crash, bind failure after resume),
+    // keep the toggle honest so the user isn't looking at a green switch
+    // above a dead server.
+    listen('lan-server-started', (event) => {
+      const url = event.payload;
+      if (url) lanUrlEl.textContent = url;
+    });
+    listen('lan-server-stopped', () => {
+      lanUrlEl.textContent = 'LAN server is off';
+      lanServerEnabled = false;
+      applyLanServerUI();
+      localStorage.setItem('dictator-lan-server', 'false');
+    });
 
     // ── Tailscale toggle ────────────────────────────────────────────────
     const tailscaleToggle = document.getElementById('tailscaleToggle');

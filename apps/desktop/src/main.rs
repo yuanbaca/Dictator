@@ -105,6 +105,9 @@ struct AppState {
     no_model: Mutex<bool>,
     /// Whether the Tailscale HTTPS server is running
     tailscale_server_running: Arc<AtomicBool>,
+    /// Handle for gracefully shutting down the LAN server. Present while the
+    /// server is running; cleared when stopped.
+    lan_server_handle: Mutex<Option<axum_server::Handle>>,
     /// Shared server state pieces needed to start Tailscale server dynamically
     server_shared: Mutex<Option<ServerShared>>,
     /// When the Tailscale cert was last generated (epoch secs), for expiry tracking
@@ -127,7 +130,10 @@ struct AppState {
     live_session: Mutex<Option<DesktopLiveSession>>,
 }
 
-/// Shared references needed to construct a ServerState for the dynamic Tailscale server.
+/// Shared references needed to construct a ServerState for the dynamic
+/// LAN + Tailscale servers. Cloned out of AppState's mutex each time a
+/// server is (re)started, so the fields are all cheap Arc clones.
+#[derive(Clone)]
 struct ServerShared {
     transcriber: Arc<Mutex<Option<transcription::Transcriber>>>,
     formatter: Arc<Mutex<Option<llm::Formatter>>>,
@@ -275,6 +281,7 @@ fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, Str
                         ts_state,
                         TAILSCALE_PORT,
                         server::TlsSource::Tailscale { cert_pem, key_pem },
+                        None,
                     )
                     .await;
                 });
@@ -296,6 +303,92 @@ fn invoke_refresh_tailscale(app_handle: &tauri::AppHandle) -> Result<String, Str
 #[tauri::command]
 fn refresh_tailscale(app_handle: tauri::AppHandle) -> Result<String, String> {
     invoke_refresh_tailscale(&app_handle)
+}
+
+/// Start the LAN phone-companion server. Idempotent — calling while already
+/// running is a no-op that returns the current URL. Rebuilds the
+/// `ServerState` from `server_shared` stored at startup, generates a fresh
+/// self-signed cert covering current local IPs, and spawns a dedicated
+/// tokio runtime to host axum.
+#[tauri::command]
+fn start_lan_server(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let state: State<AppState> = app_handle.state();
+
+    // Already running? Return the cached URL.
+    if state.lan_server_handle.lock().unwrap().is_some() {
+        if let Some(url) = state.server_url.lock().unwrap().clone() {
+            return Ok(url);
+        }
+    }
+
+    // Pull the shared server state that was stashed at startup.
+    let shared = match state.server_shared.lock().unwrap().clone() {
+        Some(s) => s,
+        None => return Err("Server state not initialized".to_string()),
+    };
+
+    let ips = server::get_local_ips();
+    let url = format!("https://{}:{}", ips[0], LAN_PORT);
+
+    let handle = axum_server::Handle::new();
+    *state.lan_server_handle.lock().unwrap() = Some(handle.clone());
+    *state.server_url.lock().unwrap() = Some(url.clone());
+
+    let app_handle_thread = app_handle.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for LAN server");
+        rt.block_on(async move {
+            let lan_state = std::sync::Arc::new(server::ServerState {
+                transcriber: shared.transcriber,
+                formatter: shared.formatter,
+                injection_mode: shared.injection_mode,
+                connected_phones: shared.connected_phones,
+                auto_space: shared.auto_space,
+                auto_format: shared.auto_format,
+                auto_format_type: shared.auto_format_type,
+                cert_type: "self-signed".to_string(),
+                using_gpu: shared.using_gpu,
+                force_cpu: shared.force_cpu,
+                live_context: shared.live_context,
+                tts_trigger: Some(shared.tts_trigger),
+            });
+            server::run_server(
+                lan_state,
+                LAN_PORT,
+                server::TlsSource::SelfSigned { local_ips: ips },
+                Some(handle),
+            )
+            .await;
+        });
+        // Server returned — clear state so UI reflects stopped state.
+        let s: State<AppState> = app_handle_thread.state();
+        *s.lan_server_handle.lock().unwrap() = None;
+        *s.server_url.lock().unwrap() = None;
+        *s.connected_phones.lock().unwrap() = 0;
+        let _ = app_handle_thread.emit("lan-server-stopped", ());
+    });
+
+    eprintln!("LAN server started on port {LAN_PORT} ({url})");
+    let _ = app_handle.emit("lan-server-started", url.clone());
+    Ok(url)
+}
+
+/// Stop the LAN server gracefully. No-op if not running.
+#[tauri::command]
+fn stop_lan_server(state: State<AppState>) -> Result<(), String> {
+    let handle_opt = state.lan_server_handle.lock().unwrap().take();
+    if let Some(handle) = handle_opt {
+        handle.graceful_shutdown(Some(std::time::Duration::from_secs(2)));
+        eprintln!("LAN server shutdown signalled");
+    }
+    *state.server_url.lock().unwrap() = None;
+    Ok(())
+}
+
+/// Whether the LAN companion server is currently accepting connections.
+#[tauri::command]
+fn get_lan_server_running(state: State<AppState>) -> bool {
+    state.lan_server_handle.lock().unwrap().is_some()
 }
 
 /// Returns Tailscale status info: url, running, days until cert expiry.
@@ -2520,22 +2613,15 @@ fn main() {
         eprintln!("power_events: registration failed ({e}) — continuing without sleep/resume detection");
     }
 
-    // Determine LAN IPs for fallback
-    let ips = server::get_local_ips();
-
     // ── Networking strategy ──
     //
-    // Two servers, user picks which URL to open on their phone:
-    //   Port 3456 — LAN (self-signed cert, always runs, same WiFi only)
-    //   Port 3457 — Tailscale (trusted cert, only if available, works from anywhere)
+    // Two servers, both opt-in via Settings toggles:
+    //   Port 3456 — LAN (self-signed cert, same WiFi only)
+    //   Port 3457 — Tailscale (trusted cert, works from anywhere)
     //
-    // This way Tailscale is never forced, and LAN always works as a fallback.
-
-    let lan_url = format!("https://{}:{}", ips[0], LAN_PORT);
-
-    // Tailscale is opt-in — the frontend enables it via refresh_tailscale when the user toggles it on.
-    // At boot we only start the LAN server. Tailscale server starts dynamically on demand.
-    eprintln!("LAN URL: {lan_url} (self-signed, same WiFi)");
+    // The app defaults to fully local on a fresh install. The UI restores
+    // saved preferences on startup and invokes start_lan_server /
+    // refresh_tailscale if those were previously enabled.
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -2590,7 +2676,7 @@ fn main() {
             auto_format: auto_format.clone(),
             auto_format_type: auto_format_type.clone(),
             model_error: Mutex::new(None),
-            server_url: Mutex::new(Some(lan_url)),
+            server_url: Mutex::new(None),
             connected_phones: connected_phones.clone(),
             cert_type: Mutex::new("self-signed".to_string()),
             tailscale_url: Mutex::new(None),
@@ -2618,6 +2704,7 @@ fn main() {
             llm_error: Mutex::new(None),
             no_model: Mutex::new(false),
             tailscale_server_running: Arc::new(AtomicBool::new(false)),
+            lan_server_handle: Mutex::new(None),
             server_shared: Mutex::new(None),
             tailscale_cert_generated: Mutex::new(None),
             custom_templates: Arc::new(Mutex::new(
@@ -2635,6 +2722,9 @@ fn main() {
             get_cert_type,
             get_tailscale_url,
             refresh_tailscale,
+            start_lan_server,
+            stop_lan_server,
+            get_lan_server_running,
             get_tailscale_status,
             get_auto_space,
             set_auto_space,
@@ -2917,32 +3007,22 @@ fn main() {
                 });
             }
 
-            // Only the LAN server starts at boot. Tailscale is opt-in via Settings toggle.
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-                rt.block_on(async move {
-                    let lan_state = Arc::new(server::ServerState {
-                        transcriber: server_transcriber,
-                        formatter: server_formatter,
-                        injection_mode: server_injection,
-                        connected_phones: server_phones,
-                        auto_space: server_auto_space,
-                        auto_format: server_auto_format,
-                        auto_format_type: server_auto_format_type,
-                        cert_type: "self-signed".to_string(),
-                        using_gpu: server_gpu,
-                        force_cpu: force_cpu,
-                        live_context: live_context,
-                        tts_trigger: Some(tts_tx),
-                    });
-                    server::run_server(
-                        lan_state,
-                        LAN_PORT,
-                        server::TlsSource::SelfSigned { local_ips: ips },
-                    )
-                    .await;
-                });
-            });
+            // Both LAN and Tailscale servers are opt-in. The UI will invoke
+            // start_lan_server on startup if the user's saved preference says
+            // so — otherwise the app runs purely locally with no open ports.
+            // Consume the server_* bindings so Rust doesn't warn about unused
+            // variables (clones live on inside server_shared).
+            let _ = (
+                server_transcriber,
+                server_formatter,
+                server_injection,
+                server_phones,
+                server_auto_space,
+                server_auto_format,
+                server_auto_format_type,
+                server_gpu,
+                tts_tx,
+            );
 
             // ── System tray — auto-format toggle, cancel recording, show/quit ───
             use tauri::menu::PredefinedMenuItem;

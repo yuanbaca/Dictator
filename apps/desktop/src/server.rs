@@ -50,7 +50,12 @@ const COMPANION_HTML: &str = include_str!("../companion/index.html");
 const SETUP_HTML: &str = include_str!("../companion/setup.html");
 
 /// Start the HTTPS server on the given port. Runs until the app exits.
-pub async fn run_server(state: Arc<ServerState>, port: u16, tls: TlsSource) {
+pub async fn run_server(
+    state: Arc<ServerState>,
+    port: u16,
+    tls: TlsSource,
+    shutdown_handle: Option<axum_server::Handle>,
+) {
     let state_for_ws = state.clone();
     let state_for_api = state.clone();
 
@@ -107,10 +112,14 @@ pub async fn run_server(state: Arc<ServerState>, port: u16, tls: TlsSource) {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     eprintln!("Phone companion server listening on https://0.0.0.0:{port}");
 
-    axum_server::bind_rustls(addr, tls_config)
-        .serve(app.into_make_service())
-        .await
-        .expect("Server error");
+    let mut server = axum_server::bind_rustls(addr, tls_config);
+    if let Some(handle) = shutdown_handle {
+        server = server.handle(handle);
+    }
+    if let Err(e) = server.serve(app.into_make_service()).await {
+        // Graceful shutdown returns Err on some paths — log rather than panic.
+        eprintln!("Phone companion server stopped: {e}");
+    }
 }
 
 /// Handle a WebSocket connection from a phone.
