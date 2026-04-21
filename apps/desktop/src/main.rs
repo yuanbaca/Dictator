@@ -521,9 +521,19 @@ fn get_force_cpu(state: State<AppState>) -> bool {
 
 #[tauri::command]
 fn set_force_cpu(state: State<AppState>, force: bool) {
-    *state.force_cpu.lock().unwrap() = force;
-    // Models will pick up the new setting on next load/reload.
-    // Clear loaded models so they reload with the new GPU preference.
+    // Idempotent: the UI calls this on startup to sync localStorage → backend,
+    // and we don't want that sync to tear down a freshly-loaded model. Only
+    // drop loaded models when the value is genuinely changing.
+    {
+        let mut current = state.force_cpu.lock().unwrap();
+        if *current == force {
+            return;
+        }
+        *current = force;
+    }
+    // The preference actually changed — clear loaded models so they reload
+    // with the new GPU preference. VRAM is reclaimed immediately when
+    // toggling ON since the GPU-backed models are the only strong refs.
     *state.transcriber.lock().unwrap() = None;
     *state.formatter.lock().unwrap() = None;
     *state.using_gpu.lock().unwrap() = None;
