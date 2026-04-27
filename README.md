@@ -134,6 +134,10 @@ Open **Settings** > scroll to bottom > click **Remove all app data**. This delet
 
 After cleanup, close the app and delete the app folder. See [docs/uninstall.md](docs/uninstall.md) for manual cleanup steps.
 
+## Built with AI assistance
+
+Dictator's source was developed collaboratively with [Anthropic's Claude](https://claude.ai). The product direction, architecture decisions, real-world testing, and final review are mine; substantial portions of the implementation, refactoring, and documentation were drafted by Claude under my direction. I'm including this note for transparency — the code is mine in the legal/authorship sense (and licensed accordingly), but I want users and contributors to know it wasn't written entirely by hand.
+
 ## License
 
 Released under the [MIT License](LICENSE) — free to use, modify, and distribute, including in commercial projects. The only requirement is that the copyright notice and permission text in `LICENSE` travel with the code (or any substantial portion of it) when you redistribute.
