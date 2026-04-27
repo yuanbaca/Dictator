@@ -136,4 +136,15 @@ After cleanup, close the app and delete the app folder. See [docs/uninstall.md](
 
 ## License
 
-Private repository.
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute, including in commercial projects. The only requirement is that the copyright notice and permission text in `LICENSE` travel with the code (or any substantial portion of it) when you redistribute.
+
+### Third-party components
+
+Dictator bundles or links to several open-source projects, each under its own license — those licenses are unaffected by Dictator's MIT license:
+
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — MIT
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) — MIT
+- [Piper](https://github.com/rhasspy/piper) TTS — MIT
+- [Silero VAD](https://github.com/snakers4/silero-vad) — MIT
+- [OpenWakeWord](https://github.com/dscripka/openWakeWord) — Apache 2.0 (the bundled `.onnx` models live under `apps/desktop/resources/openwakeword/`)
+- [Tauri](https://tauri.app/) — Apache 2.0 / MIT
