@@ -6,6 +6,8 @@ pub mod tailscale;
 pub mod llm;
 pub mod model_manager;
 pub mod word_bank;
+pub mod user_prefs;
+pub mod wake_word;
 pub mod history;
 pub mod templates;
 pub mod tts;

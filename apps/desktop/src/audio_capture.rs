@@ -37,12 +37,18 @@ pub fn list_input_devices() -> Vec<String> {
 /// audio to 16 kHz and sends it to the channel, enabling a live VAD preview
 /// to run alongside the recording without a second microphone stream.
 ///
+/// When `silence_tx` is Some, each callback sends the same 16 kHz mono audio
+/// to a separate channel intended for the silence-auto-stop watchdog. Both
+/// channels are independent so the preview pipeline and the watchdog can
+/// coexist without competing for the mic.
+///
 /// Returns mono f32 samples at 16kHz.
 pub fn record_until_stopped(
     stop: Arc<AtomicBool>,
     device_name: Option<String>,
     peak_level: Arc<AtomicU32>,
     preview_tx: Option<mpsc::UnboundedSender<Vec<f32>>>,
+    silence_tx: Option<mpsc::UnboundedSender<Vec<f32>>>,
 ) -> Result<Vec<f32>> {
     let host = cpal::default_host();
     let device = if let Some(ref name) = device_name {
@@ -76,6 +82,11 @@ pub fn record_until_stopped(
     let ptx_i16 = preview_tx.clone();
     let ptx_u16 = preview_tx;
 
+    // Same fan-out for the silence-auto-stop watchdog channel.
+    let stx_f32 = silence_tx.clone();
+    let stx_i16 = silence_tx.clone();
+    let stx_u16 = silence_tx;
+
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
@@ -83,11 +94,19 @@ pub fn record_until_stopped(
                 let chunk_peak = data.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                 peak_f32.fetch_max(chunk_peak.to_bits(), Ordering::Relaxed);
                 samples_clone.lock().unwrap().extend_from_slice(data);
-                // Fork to preview pipeline (mono + resample to 16 kHz)
-                if let Some(ref tx) = ptx_f32 {
+                // Fork to preview pipeline (mono + resample to 16 kHz). Reuse
+                // the same conversion for the silence watchdog when both are
+                // active so we don't pay for the resampling twice.
+                let needs_16k = ptx_f32.is_some() || stx_f32.is_some();
+                if needs_16k {
                     let mono = to_mono_f32(data, channels);
                     let chunk = resample_chunk(&mono, sample_rate, 16000);
-                    let _ = tx.send(chunk);
+                    if let Some(ref tx) = ptx_f32 {
+                        let _ = tx.send(chunk.clone());
+                    }
+                    if let Some(ref tx) = stx_f32 {
+                        let _ = tx.send(chunk);
+                    }
                 }
             },
             |err| eprintln!("Audio error: {err}"),
@@ -102,10 +121,16 @@ pub fn record_until_stopped(
                     let chunk_peak = floats.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     peak_i16.fetch_max(chunk_peak.to_bits(), Ordering::Relaxed);
                     sc.lock().unwrap().extend_from_slice(&floats);
-                    if let Some(ref tx) = ptx_i16 {
+                    let needs_16k = ptx_i16.is_some() || stx_i16.is_some();
+                    if needs_16k {
                         let mono = to_mono_f32(&floats, channels);
                         let chunk = resample_chunk(&mono, sample_rate, 16000);
-                        let _ = tx.send(chunk);
+                        if let Some(ref tx) = ptx_i16 {
+                            let _ = tx.send(chunk.clone());
+                        }
+                        if let Some(ref tx) = stx_i16 {
+                            let _ = tx.send(chunk);
+                        }
                     }
                 },
                 |err| eprintln!("Audio error: {err}"),
@@ -124,10 +149,16 @@ pub fn record_until_stopped(
                     let chunk_peak = floats.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     peak_u16.fetch_max(chunk_peak.to_bits(), Ordering::Relaxed);
                     sc.lock().unwrap().extend_from_slice(&floats);
-                    if let Some(ref tx) = ptx_u16 {
+                    let needs_16k = ptx_u16.is_some() || stx_u16.is_some();
+                    if needs_16k {
                         let mono = to_mono_f32(&floats, channels);
                         let chunk = resample_chunk(&mono, sample_rate, 16000);
-                        let _ = tx.send(chunk);
+                        if let Some(ref tx) = ptx_u16 {
+                            let _ = tx.send(chunk.clone());
+                        }
+                        if let Some(ref tx) = stx_u16 {
+                            let _ = tx.send(chunk);
+                        }
                     }
                 },
                 |err| eprintln!("Audio error: {err}"),
@@ -168,14 +199,24 @@ pub fn record_until_stopped(
 // ─── Live-mode streaming ───────────────────────────────────────────────
 
 /// A running microphone capture that feeds audio into a live session.
-/// Dropping the handle (or calling [`stop`](Self::stop)) ends the capture.
+/// Dropping the handle (or calling [`stop`](Self::stop)) ends the capture
+/// **synchronously** — i.e. by the time `drop` returns, the underlying
+/// cpal stream has been released back to the OS and the mic device can
+/// be opened again. This matters because Windows audio drivers routinely
+/// refuse two concurrent input streams on the same device, and our own
+/// recording / wake-word flows hand the mic back and forth in quick
+/// succession.
 pub struct LiveCaptureHandle {
     stop: Arc<AtomicBool>,
+    /// Join handle for the cpal keepalive thread. Taken on drop so we
+    /// can wait for it to finish releasing the cpal stream.
+    join: Option<std::thread::JoinHandle<()>>,
 }
 
 impl LiveCaptureHandle {
-    /// Signal the capture to shut down. The cpal stream will be dropped
-    /// on the next tick of the keepalive thread (~100 ms worst-case).
+    /// Signal the capture to shut down. Returns immediately — use `Drop`
+    /// (i.e. let the handle go out of scope) if you need a synchronous
+    /// stop that guarantees mic release.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
@@ -184,6 +225,12 @@ impl LiveCaptureHandle {
 impl Drop for LiveCaptureHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.join.take() {
+            // Block until the cpal thread exits and drops `cpal::Stream`,
+            // which is what actually releases the WASAPI handle. Bounded
+            // in practice by the keepalive sleep interval below.
+            let _ = handle.join();
+        }
     }
 }
 
@@ -215,7 +262,7 @@ pub fn stream_to_live(
     // get a synchronous Result.
     let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<()>>(0);
 
-    std::thread::Builder::new()
+    let join = std::thread::Builder::new()
         .name("live-mic".into())
         .spawn(move || {
             let result = (|| -> Result<cpal::Stream> {
@@ -295,9 +342,14 @@ pub fn stream_to_live(
                     // Signal init success, then keep the stream alive.
                     let _ = init_tx.send(Ok(()));
                     let _stream = stream;
+                    // Short keepalive interval so `LiveCaptureHandle::drop`'s
+                    // join doesn't stall recordings/listeners that need to
+                    // reopen the mic. 20 ms is fast enough that the user
+                    // doesn't notice and slow enough not to peg a CPU core.
                     while !stop_clone.load(Ordering::Relaxed) {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        std::thread::sleep(std::time::Duration::from_millis(20));
                     }
+                    // _stream drops here, releasing the WASAPI handle.
                 }
                 Err(e) => {
                     let _ = init_tx.send(Err(e));
@@ -311,7 +363,7 @@ pub fn stream_to_live(
         .recv()
         .map_err(|_| anyhow::anyhow!("live-mic thread exited before init"))??;
 
-    Ok(LiveCaptureHandle { stop })
+    Ok(LiveCaptureHandle { stop, join: Some(join) })
 }
 
 // ─── Shared helpers ────────────────────────────────────────────────────

@@ -15,6 +15,8 @@ use dictator::templates::{ChatFormat, FormatType};
 use dictator::history;
 use dictator::transcription;
 use dictator::tts;
+use dictator::user_prefs;
+use dictator::wake_word;
 use dictator::word_bank;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -128,6 +130,34 @@ struct AppState {
     live_preview: Arc<Mutex<bool>>,
     /// Active desktop-mic live session, if any.
     live_session: Mutex<Option<DesktopLiveSession>>,
+    /// Silence-auto-stop: end the recording automatically after the user
+    /// has stopped talking for the configured number of seconds. Off by
+    /// default; UI restores the saved preference on startup.
+    auto_stop_enabled: Arc<Mutex<bool>>,
+    /// Silence span (in seconds) after which auto-stop fires. Tunable per
+    /// user — too short clips mid-thought, too long delays transcription.
+    auto_stop_secs: Arc<Mutex<f32>>,
+    /// User-configurable wake phrase (case-insensitive substring match
+    /// against live transcripts). Defaults to "hey dictator". The "is
+    /// the wake word listener currently active?" question is answered
+    /// by `wake_word_handle.is_some()` rather than a separate flag —
+    /// the UI restores its enabled-or-not preference from localStorage.
+    wake_word_phrase: Arc<Mutex<String>>,
+    /// rustpotter detection threshold in 0.0..1.0. 0.45 default — lower
+    /// = looser (catches mumbled / quiet pronunciations, more false
+    /// positives), higher = stricter. Read at listener-start time, so
+    /// the user has to toggle off/on for a slider change to apply.
+    wake_word_threshold: Arc<Mutex<f32>>,
+    /// Active wake-word listener, if any. Holds both the live session and
+    /// the cpal capture so dropping the field cleanly releases the mic.
+    wake_word_handle: Mutex<Option<WakeWordHandle>>,
+}
+
+/// Resources that live for the duration of a wake-word listener. Dropping
+/// the struct ends the cpal capture (frees the mic), which closes the
+/// frame channel and lets the matcher task exit naturally.
+struct WakeWordHandle {
+    _capture: audio_capture::LiveCaptureHandle,
 }
 
 /// Shared references needed to construct a ServerState for the dynamic
@@ -519,6 +549,196 @@ fn get_force_cpu(state: State<AppState>) -> bool {
     *state.force_cpu.lock().unwrap()
 }
 
+// ── Silence-auto-stop & wake-word settings ────────────────────────────
+// Both features are read every time `start_recording` (and the wake-word
+// listener) fires, so we just expose plain getters/setters here. The UI
+// is the source of truth — it persists to localStorage and pushes the
+// values down on settings change.
+
+#[tauri::command]
+fn get_auto_stop(state: State<AppState>) -> bool {
+    *state.auto_stop_enabled.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_auto_stop(state: State<AppState>, enabled: bool) {
+    *state.auto_stop_enabled.lock().unwrap() = enabled;
+}
+
+#[tauri::command]
+fn get_auto_stop_secs(state: State<AppState>) -> f32 {
+    *state.auto_stop_secs.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_auto_stop_secs(state: State<AppState>, secs: f32) {
+    // Clamp to a sensible range so a malformed UI value can't trap users
+    // in either "auto-stop never fires" or "auto-stop fires mid-word".
+    let clamped = secs.clamp(0.5, 10.0);
+    *state.auto_stop_secs.lock().unwrap() = clamped;
+}
+
+#[tauri::command]
+fn get_wake_word_threshold(state: State<AppState>) -> f32 {
+    *state.wake_word_threshold.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_wake_word_threshold(state: State<AppState>, threshold: f32) {
+    // Clamp away from the extremes — values near 0 instantly fire on
+    // noise; values near 1 mean the listener will never detect anything.
+    *state.wake_word_threshold.lock().unwrap() = threshold.clamp(0.1, 0.95);
+}
+
+#[tauri::command]
+fn list_wake_word_phrases() -> Vec<serde_json::Value> {
+    wake_word::WakePhrase::all()
+        .iter()
+        .map(|p| serde_json::json!({ "id": p.id(), "label": p.label() }))
+        .collect()
+}
+
+#[tauri::command]
+fn get_wake_word_phrase_id(state: State<AppState>) -> String {
+    state.wake_word_phrase.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_wake_word_phrase_id(state: State<AppState>, phrase_id: String) {
+    if wake_word::WakePhrase::from_id(&phrase_id).is_some() {
+        *state.wake_word_phrase.lock().unwrap() = phrase_id;
+    }
+}
+
+/// Start an always-on wake-word listener using OpenWakeWord's pre-trained
+/// ONNX pipeline (mel spectrogram → embedding → keyword classifier). The
+/// keyword model is selected by the user's stored phrase id.
+///
+/// On match: emits `wake-word-triggered` and tears down its own handle so
+/// the mic is free by the time the UI fires `start_recording`.
+#[tauri::command]
+async fn start_wake_word_listener(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    // Idempotent: multiple invocations (e.g. UI restoring on startup +
+    // toggle change) should be a no-op rather than spawn duplicates.
+    if state.wake_word_handle.lock().unwrap().is_some() {
+        return Ok(());
+    }
+
+    // Refusing to start while a recording is in flight avoids fighting over
+    // the mic. The UI restarts the listener after stop_and_transcribe.
+    if state.recording.lock().unwrap().is_some() {
+        return Err("Cannot start wake-word listener while recording".into());
+    }
+
+    // Resolve the phrase + threshold up front so we can fail with a
+    // friendly message before any cpal stream is opened.
+    let phrase_id = state.wake_word_phrase.lock().unwrap().clone();
+    let phrase = wake_word::WakePhrase::from_id(&phrase_id)
+        .ok_or_else(|| format!("Unknown wake phrase '{phrase_id}'"))?;
+    let threshold = *state.wake_word_threshold.lock().unwrap();
+
+    let mut detector = wake_word::WakeWordDetector::new(phrase)
+        .map_err(|e| format!("Failed to build wake-word detector: {e}"))?;
+
+    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+    let device_name = state.selected_device.lock().unwrap().clone();
+    let capture = audio_capture::stream_to_live(frame_tx, device_name)
+        .map_err(|e| format!("Failed to start wake-word capture: {e}"))?;
+
+    let ah = app_handle.clone();
+    tokio::spawn(async move {
+        let mut last_emit = std::time::Instant::now();
+        let _ = ah.emit("wake-word-threshold", threshold);
+        // Warmup: still useful as a UI signal even though OpenWakeWord
+        // does its own first-5-zero suppression. Covers the WASAPI
+        // settling window and any post-recording paste/keyboard
+        // artifacts when the listener re-arms after a dictation.
+        let warmup_until = std::time::Instant::now()
+            + std::time::Duration::from_millis(2500);
+        let mut warmup_done_emitted = false;
+        while let Some(samples) = frame_rx.recv().await {
+            // OpenWakeWord pipeline runs on edge cases; wrap so that a
+            // panic in ort or our buffering math leaves a clean exit
+            // rather than a dead task with no logging.
+            let result = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| detector.push_samples(&samples)),
+            );
+            let score_opt = match result {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    eprintln!("wake-word: inference error: {e}");
+                    None
+                }
+                Err(_) => {
+                    eprintln!("wake-word: pipeline panicked — disabling listener");
+                    let st: State<AppState> = ah.state();
+                    let old = {
+                        let mut guard = st.wake_word_handle.lock().unwrap();
+                        guard.take()
+                    };
+                    drop(old);
+                    return;
+                }
+            };
+            let now = std::time::Instant::now();
+            if !warmup_done_emitted && now >= warmup_until {
+                warmup_done_emitted = true;
+                let _ = ah.emit("wake-word-warmed-up", ());
+            }
+            // Always emit the latest score (throttled) so the UI gauge
+            // stays alive — even during warmup, so users can see the
+            // pipeline is processing audio.
+            if let Some(s) = score_opt {
+                if last_emit.elapsed() > std::time::Duration::from_millis(200) {
+                    let _ = ah.emit("wake-word-score", s);
+                    last_emit = now;
+                }
+                // Suppress real fires until warmup is complete.
+                if now < warmup_until {
+                    continue;
+                }
+                if s >= threshold {
+                    eprintln!("wake-word: matched (score {:.2})", s);
+                    // Tear down BEFORE emitting — the drop blocks until
+                    // cpal hands the WASAPI handle back, so by the time
+                    // the UI receives the event the mic is free.
+                    let st: State<AppState> = ah.state();
+                    let old = {
+                        let mut guard = st.wake_word_handle.lock().unwrap();
+                        guard.take()
+                    };
+                    drop(old);
+                    let _ = ah.emit("wake-word-triggered", ());
+                    return;
+                }
+            }
+        }
+    });
+
+    *state.wake_word_handle.lock().unwrap() = Some(WakeWordHandle { _capture: capture });
+    eprintln!("wake-word: listener started ({})", phrase.id());
+    Ok(())
+}
+
+/// Stop the wake-word listener (if running). Idempotent.
+#[tauri::command]
+fn stop_wake_word_listener(state: State<AppState>) {
+    let handle = state.wake_word_handle.lock().unwrap().take();
+    if handle.is_some() {
+        eprintln!("wake-word: listener stopped");
+    }
+    // Drop happens at end of scope — releases mic, closes frame_tx →
+    // matcher task exits when its receiver returns None.
+}
+
+#[tauri::command]
+fn get_wake_word_listener_running(state: State<AppState>) -> bool {
+    state.wake_word_handle.lock().unwrap().is_some()
+}
+
 #[tauri::command]
 fn set_force_cpu(state: State<AppState>, force: bool) {
     // Idempotent: the UI calls this on startup to sync localStorage → backend,
@@ -531,6 +751,9 @@ fn set_force_cpu(state: State<AppState>, force: bool) {
         }
         *current = force;
     }
+    // Persist so the next launch's startup loader picks the right mode
+    // without relying on the webview's localStorage sync to flip it.
+    user_prefs::save_force_cpu(force);
     // The preference actually changed — clear loaded models so they reload
     // with the new GPU preference. VRAM is reclaimed immediately when
     // toggling ON since the GPU-backed models are the only strong refs.
@@ -776,9 +999,77 @@ async fn start_recording(
         None
     };
 
+    // Optionally spawn a silence-auto-stop watchdog. Audio is forked from
+    // the mic callback into a dedicated VAD configured with the user's
+    // silence threshold; once it sees end-of-speech it emits a Tauri event
+    // that the UI handles by triggering the same stop path as a hotkey
+    // press. Independent of the live-preview pipeline so users can run
+    // either, both, or neither.
+    let auto_stop_enabled = *state.auto_stop_enabled.lock().unwrap();
+    let auto_stop_secs = *state.auto_stop_secs.lock().unwrap();
+    let silence_tx = if auto_stop_enabled && auto_stop_secs > 0.0 {
+        let chunks = dictator::vad::silence_chunks_for_secs(auto_stop_secs);
+        match dictator::vad::Vad::with_silence_chunks(chunks) {
+            Ok(mut watchdog) => {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+                let ah = app_handle.clone();
+                // No-speech timeout: if the recording starts (e.g. via
+                // wake word) but the user never actually says anything,
+                // we want to clean up rather than sit there forever.
+                // Heuristic: 2× the user's silence span, with a 2 s floor
+                // so a 0.5 s slider doesn't make this trigger before the
+                // user can draw breath.
+                let no_speech_timeout = std::time::Duration::from_secs_f32(
+                    (auto_stop_secs * 2.0).max(2.0),
+                );
+                tokio::spawn(async move {
+                    use dictator::vad::VadEvent;
+                    let mut speech_seen = false;
+                    let started = std::time::Instant::now();
+                    while let Some(samples) = rx.recv().await {
+                        // Cancel if nothing was ever said within the
+                        // grace window. Distinct event from auto-stop —
+                        // the UI maps this to `cancel_recording`, not
+                        // `stop_and_transcribe`, so no garbage gets
+                        // transcribed and injected.
+                        if !speech_seen && started.elapsed() > no_speech_timeout {
+                            let _ = ah.emit("auto-cancel-recording", ());
+                            return;
+                        }
+                        watchdog.push_samples(&samples);
+                        for ev in watchdog.drain_events() {
+                            match ev {
+                                VadEvent::Start => speech_seen = true,
+                                VadEvent::End { .. } => {
+                                    if speech_seen {
+                                        let _ = ah.emit("auto-stop-recording", ());
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+                Some(tx)
+            }
+            Err(e) => {
+                eprintln!("auto-stop: VAD init failed: {e} — auto-stop disabled this session");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let ptx = preview_tx.clone();
     let thread = std::thread::spawn(move || {
-        match audio_capture::record_until_stopped(stop_clone, device_name, peak_clone, ptx) {
+        match audio_capture::record_until_stopped(
+            stop_clone,
+            device_name,
+            peak_clone,
+            ptx,
+            silence_tx,
+        ) {
             Ok(recorded) => {
                 *samples_clone.lock().unwrap() = recorded;
             }
@@ -2582,6 +2873,35 @@ fn enforce_single_instance() -> windows::Win32::Foundation::HANDLE {
 // ── App entry point ─────────────────────────────────────────────────────
 
 fn main() {
+    // Install a panic hook that appends to `panic.log` next to the exe
+    // before forwarding to the default hook (which writes to stderr that
+    // a packaged Windows GUI app discards). Crashes in background threads
+    // — VAD, wake-word listener, cpal callbacks — used to be invisible;
+    // now we can read the log to see what happened.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let log_path = dir.join("panic.log");
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&log_path)
+                {
+                    use std::io::Write;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let _ = writeln!(f, "[{now}] {info}");
+                    let _ = writeln!(f, "{}", std::backtrace::Backtrace::force_capture());
+                    let _ = writeln!(f, "---");
+                }
+            }
+        }
+        default_hook(info);
+    }));
+
     // Install the TLS crypto provider before anything else — both ring and
     // aws-lc-rs features are activated by our dependency tree (ureq + axum-server),
     // so rustls can't auto-detect which one to use.
@@ -2606,8 +2926,22 @@ fn main() {
     let using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let llm_using_gpu: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let llm_status: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
-    let force_cpu: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    // Read from disk so the startup whisper loader below picks the
+    // right GPU/CPU mode on the first try. Without this, we'd default to
+    // `false`, load GPU, then have the webview's localStorage sync flip
+    // us to `true` and clear the just-loaded model — UI ends up stuck on
+    // "Loading whisper model…". See `user_prefs` module for the full
+    // race description.
+    let force_cpu: Arc<Mutex<bool>> = Arc::new(Mutex::new(user_prefs::load_force_cpu()));
     let selected_device: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // Hands-free recording features. Both default off; the UI restores
+    // saved preferences from localStorage on startup. Defaults chosen so
+    // existing users see no behaviour change unless they opt in.
+    let auto_stop_enabled: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let auto_stop_secs: Arc<Mutex<f32>> = Arc::new(Mutex::new(2.0));
+    let wake_word_phrase: Arc<Mutex<String>> =
+        Arc::new(Mutex::new(wake_word::WakePhrase::HeyJarvis.id().to_string()));
+    let wake_word_threshold: Arc<Mutex<f32>> = Arc::new(Mutex::new(0.50));
 
     // Layer 2 of GPU resilience: subscribe to Windows suspend/resume events so
     // we can unload the models before they attempt to run on a stale Vulkan
@@ -2724,6 +3058,11 @@ fn main() {
             live_context: live_context.clone(),
             live_preview: live_preview.clone(),
             live_session: Mutex::new(None),
+            auto_stop_enabled: auto_stop_enabled.clone(),
+            auto_stop_secs: auto_stop_secs.clone(),
+            wake_word_phrase: wake_word_phrase.clone(),
+            wake_word_threshold: wake_word_threshold.clone(),
+            wake_word_handle: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -2749,6 +3088,18 @@ fn main() {
             get_gpu_status,
             get_force_cpu,
             set_force_cpu,
+            get_auto_stop,
+            set_auto_stop,
+            get_auto_stop_secs,
+            set_auto_stop_secs,
+            list_wake_word_phrases,
+            get_wake_word_phrase_id,
+            set_wake_word_phrase_id,
+            get_wake_word_threshold,
+            set_wake_word_threshold,
+            start_wake_word_listener,
+            stop_wake_word_listener,
+            get_wake_word_listener_running,
             get_word_bank,
             set_word_bank,
             get_history,

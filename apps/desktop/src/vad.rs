@@ -28,16 +28,38 @@ pub const SAMPLE_RATE: usize = 16_000;
 /// Silero V5 window size at 16 kHz. Changing this means retraining — don't.
 const CHUNK_SAMPLES: usize = 512;
 
-/// Speech probability above which a chunk is considered speech.
-const SPEECH_THRESHOLD: f32 = 0.5;
+/// Default speech probability above which a chunk is considered speech.
+/// 0.5 is what Silero V5 ships with and what live mode uses for accurate
+/// endpointing. Other call sites (e.g. the wake-word gate) can override
+/// via [`Vad::with_thresholds`] to be more permissive — in that role
+/// false-negative cost (missing the wake word) is much higher than
+/// false-positive cost (letting non-voice through to rustpotter, which
+/// has its own MFCC matcher).
+pub const DEFAULT_SPEECH_THRESHOLD: f32 = 0.5;
 
-/// Number of consecutive non-speech chunks needed to close an utterance.
-/// 20 chunks * 32 ms ≈ 640 ms of silence. Compromise between the original
-/// 320 ms (10 chunks, too aggressive — premature endpoints mid-thought)
-/// and 900 ms (28 chunks, accurate but felt sluggish). 640 ms is long
-/// enough that natural thinking pauses don't split utterances, but short
-/// enough that the system still feels responsive.
-const MIN_SILENCE_CHUNKS: u32 = 20;
+/// Default number of consecutive non-speech chunks needed to close an
+/// utterance. 20 chunks * 32 ms ≈ 640 ms of silence. Compromise between the
+/// original 320 ms (10 chunks, too aggressive — premature endpoints
+/// mid-thought) and 900 ms (28 chunks, accurate but felt sluggish). 640 ms
+/// is long enough that natural thinking pauses don't split utterances, but
+/// short enough that the system still feels responsive.
+///
+/// This is the default for live-mode endpointing. The silence-auto-stop
+/// feature uses a longer, user-configurable threshold so users can tune
+/// "how long do I have to pause for the recording to auto-end?" — see
+/// [`Vad::with_silence_chunks`].
+pub const MIN_SILENCE_CHUNKS: u32 = 20;
+
+/// Convert seconds of silence into the equivalent chunk count, given that
+/// each chunk is 32 ms (512 samples / 16 kHz). Always rounds up so the
+/// threshold isn't accidentally shorter than what the user requested.
+pub fn silence_chunks_for_secs(secs: f32) -> u32 {
+    if secs <= 0.0 {
+        return MIN_SILENCE_CHUNKS;
+    }
+    let chunk_ms = 32.0_f32;
+    ((secs * 1000.0) / chunk_ms).ceil() as u32
+}
 
 /// Pre-Start audio kept in a ring buffer and prepended to each utterance.
 /// 8 chunks * 32 ms = 256 ms of lookback. With the longer silence
@@ -68,14 +90,38 @@ pub struct Vad {
     utterance: Vec<f32>,
     in_speech: bool,
     silence_chunks: u32,
+    /// How many consecutive non-speech chunks close an utterance. Configured
+    /// per-instance so live mode can use the responsive default while the
+    /// silence-auto-stop watchdog can use a longer, user-tunable threshold.
+    min_silence_chunks: u32,
+    /// Probability gate for "is this chunk speech?". Per-instance for the
+    /// same reason as `min_silence_chunks` — see [`DEFAULT_SPEECH_THRESHOLD`].
+    speech_threshold: f32,
     /// Events queued for the caller to drain.
     events: Vec<VadEvent>,
 }
 
 impl Vad {
-    /// Build a new detector. Fails if Silero VAD can't be loaded — usually a
-    /// missing `onnxruntime.dll` next to the exe.
+    /// Build a new detector with the default endpointing threshold
+    /// ([`MIN_SILENCE_CHUNKS`]). Fails if Silero VAD can't be loaded —
+    /// usually a missing `onnxruntime.dll` next to the exe.
     pub fn new() -> Result<Self> {
+        Self::with_silence_chunks(MIN_SILENCE_CHUNKS)
+    }
+
+    /// Build a new detector that closes utterances after `min_silence_chunks`
+    /// consecutive non-speech windows. Each chunk is 32 ms — see
+    /// [`silence_chunks_for_secs`] to convert seconds to chunks.
+    pub fn with_silence_chunks(min_silence_chunks: u32) -> Result<Self> {
+        Self::with_thresholds(min_silence_chunks, DEFAULT_SPEECH_THRESHOLD)
+    }
+
+    /// Build a detector with custom silence-chunks AND speech-probability
+    /// thresholds. Use a lower `speech_threshold` (e.g. 0.3) when missing
+    /// real speech is worse than letting some non-speech through —
+    /// notably the wake-word gate, where rustpotter is the actual
+    /// speech-content matcher and we just want to reject obvious silence.
+    pub fn with_thresholds(min_silence_chunks: u32, speech_threshold: f32) -> Result<Self> {
         let inner = VoiceActivityDetector::builder()
             .sample_rate(SAMPLE_RATE as i64)
             .chunk_size(CHUNK_SAMPLES)
@@ -89,6 +135,8 @@ impl Vad {
             utterance: Vec::new(),
             in_speech: false,
             silence_chunks: 0,
+            min_silence_chunks: min_silence_chunks.max(1),
+            speech_threshold: speech_threshold.clamp(0.05, 0.95),
             events: Vec::new(),
         })
     }
@@ -108,7 +156,7 @@ impl Vad {
 
     fn process_chunk(&mut self, chunk: Vec<f32>) {
         let prob = self.inner.predict(chunk.iter().copied());
-        let is_speech = prob >= SPEECH_THRESHOLD;
+        let is_speech = prob >= self.speech_threshold;
 
         if is_speech {
             if !self.in_speech {
@@ -133,7 +181,7 @@ impl Vad {
             // the silence counter.
             self.utterance.extend_from_slice(&chunk);
             self.silence_chunks += 1;
-            if self.silence_chunks >= MIN_SILENCE_CHUNKS {
+            if self.silence_chunks >= self.min_silence_chunks {
                 // Seed the lookback ring with the tail of this utterance
                 // (which is trailing silence) so the NEXT Start has
                 // pre-speech audio immediately. Without this, a quick

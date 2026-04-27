@@ -104,14 +104,20 @@ fn inject_via_paste(text: &str) -> Result<()> {
     // Send Ctrl+V
     send_ctrl_v()?;
 
-    // Wait for paste to complete
-    thread::sleep(Duration::from_millis(100));
-
-    // Restore previous clipboard contents (best-effort)
+    // Restore the previous clipboard from a background thread after a
+    // generous delay. Slow target apps (Slack, Teams, Discord, RustDesk)
+    // can take >500 ms to actually process the queued Ctrl+V — if we
+    // restore inline at 100 ms they paste the *restored* (old) clipboard
+    // instead of our text, which exactly matches the "pastes my old
+    // clipboard contents" bug. Running the restore async also lets the
+    // command return immediately so the UI feels snappy.
     if let Some(prev) = previous {
-        // Small delay before restoring
-        thread::sleep(Duration::from_millis(50));
-        let _ = clipboard.set_text(prev);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(1500));
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                let _ = cb.set_text(prev);
+            }
+        });
     }
 
     Ok(())

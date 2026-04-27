@@ -841,14 +841,101 @@
       padding: 16px 20px;
     }
 
+    /* ── Settings layout ─────────────────────────────────────────────
+       Settings live inside section "cards" with a small uppercase
+       header. Every individual setting (toggle row, select, slider) is
+       a `.setting-item` card with strict typography rules:
+         - label: 13 px primary text  (the thing you tap)
+         - hint:  11 px muted text    (the explanation, lives WITH the
+                                        toggle inside the same card so
+                                        it's never confused with the
+                                        next setting's label)
+       Use `.setting-item-row` for the [label … control] horizontal
+       arrangement. Optional follow-up controls (sliders, sub-options)
+       go in `.setting-item-controls` inside the same card, so they
+       inherit the visual grouping. */
+
+    .settings-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 4px 14px;
+      margin-bottom: 14px;
+    }
+
+    .settings-section-header {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      padding: 12px 0 8px 0;
+      border-bottom: 1px solid var(--border);
+      margin: 0 0 4px 0;
+    }
+
+    .setting-item {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .setting-item:last-child {
+      border-bottom: none;
+    }
+
+    .setting-item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .setting-item-row > label,
+    .setting-item-label {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 500;
+      flex: 1;
+    }
+
+    .setting-item-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.45;
+    }
+
+    .setting-item-controls {
+      margin-top: 10px;
+    }
+
+    .setting-item select {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+
+    .setting-item select option {
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    /* Legacy classes still used in some spots — keep them working but
+       align typography with the new section style. */
     .setting-group {
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
 
     .setting-group label {
       display: block;
-      font-size: 12px;
-      color: var(--text-dim);
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 500;
       margin-bottom: 6px;
     }
 
@@ -873,12 +960,15 @@
       align-items: center;
       justify-content: space-between;
       font-size: 13px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
 
     .setting-row:last-child { margin-bottom: 0; }
 
-    .setting-row label { color: var(--text-dim); }
+    .setting-row label {
+      color: var(--text);
+      font-weight: 500;
+    }
 
     .setting-row select {
       background: var(--bg);
@@ -1071,414 +1161,561 @@
         <button class="modal-close" id="closeSettings">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="setting-group">
-          <label>Theme</label>
-          <select id="themeSelect">
-            <optgroup label="Default">
-              <option value="dictator-dark">Dictator Dark</option>
-              <option value="dictator-light">Dictator Light</option>
-            </optgroup>
-            <optgroup label="Mint">
-              <option value="mint-dark">Mint Dark</option>
-              <option value="mint-light">Mint Light</option>
-            </optgroup>
-            <optgroup label="Colorful">
-              <option value="bubble-gum">Bubble Gum</option>
-              <option value="ocean">Ocean</option>
-              <option value="sunset">Sunset</option>
-              <option value="dracula">Dracula</option>
-            </optgroup>
-            <optgroup label="Brand Inspired">
-              <option value="discord">Discord</option>
-              <option value="facebook">Facebook</option>
-              <option value="instagram">Instagram</option>
-              <option value="youtube">YouTube</option>
-              <option value="spotify">Spotify</option>
-              <option value="twitter">Twitter / X</option>
-              <option value="slack">Slack</option>
-              <option value="netflix">Netflix</option>
-              <option value="reddit">Reddit</option>
-              <option value="twitch">Twitch</option>
-            </optgroup>
-            <optgroup label="Minimal">
-              <option value="snow">Snow</option>
-              <option value="midnight">Midnight</option>
-            </optgroup>
-          </select>
-        </div>
 
-        <div class="setting-group">
-          <label>LAN server (phone as mic)</label>
-          <div class="toggle" id="lanServerToggle"></div>
-        </div>
-        <div id="lanServerHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px;">
-          Off by default. Turn on to let your phone connect over Wi-Fi. With this off, Dictator runs fully local with no open ports.
-        </div>
-
-        <div class="setting-group">
-          <label>Tailscale (remote access)</label>
-          <div class="toggle" id="tailscaleToggle"></div>
-        </div>
-        <div id="tailscaleHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
-          Requires <a href="https://tailscale.com/" target="_blank" style="color:var(--accent);">Tailscale</a> on both PC and phone. Enables trusted HTTPS from anywhere.
-        </div>
-
-        <div class="setting-group">
-          <label>Recording hotkey</label>
-          <select id="hotkeySelect">
-            <option value="Ctrl+Shift+Space">Ctrl + Shift + Space</option>
-            <option value="Ctrl+Shift+D">Ctrl + Shift + D</option>
-            <option value="Ctrl+Alt+Space">Ctrl + Alt + Space</option>
-            <option value="F9">F9</option>
-            <option value="Ctrl+F9">Ctrl + F9</option>
-            <option value="none">Disabled</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <div id="hotkeyCustomRow" style="display:none; margin-top:6px;">
-            <input id="hotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
-              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <label>Insert at cursor hotkey</label>
-          <select id="injectHotkeySelect">
-            <option value="none">Disabled</option>
-            <option value="Ctrl+Shift+V">Ctrl + Shift + V</option>
-            <option value="Ctrl+Shift+I">Ctrl + Shift + I</option>
-            <option value="F10">F10</option>
-            <option value="Ctrl+F10">Ctrl + F10</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <div id="injectHotkeyCustomRow" style="display:none; margin-top:6px;">
-            <input id="injectHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
-              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <label>Read aloud hotkey</label>
-          <select id="ttsHotkeySelect">
-            <option value="none">Disabled</option>
-            <option value="Ctrl+Shift+R">Ctrl + Shift + R</option>
-            <option value="Ctrl+Shift+T">Ctrl + Shift + T</option>
-            <option value="F11">F11</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <div id="ttsHotkeyCustomRow" style="display:none; margin-top:6px;">
-            <input id="ttsHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
-              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
-          </div>
-        </div>
-        <div id="ttsHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
-          Highlight text anywhere, press hotkey to hear it read aloud
-        </div>
-
-        <div class="setting-group">
-          <label>Reformat selection hotkey</label>
-          <select id="reformatHotkeySelect">
-            <option value="none">Disabled</option>
-            <option value="Ctrl+Shift+F">Ctrl + Shift + F</option>
-            <option value="Ctrl+Shift+G">Ctrl + Shift + G</option>
-            <option value="F12">F12</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <div id="reformatHotkeyCustomRow" style="display:none; margin-top:6px;">
-            <input id="reformatHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
-              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
-          </div>
-        </div>
-        <div id="reformatHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
-          Highlight text anywhere, press hotkey to reformat with AI
-        </div>
-
-        <div class="setting-group">
-          <label>Copy last transcription to clipboard</label>
-          <select id="copyHotkeySelect">
-            <option value="none">Disabled</option>
-            <option value="Ctrl+Shift+C">Ctrl + Shift + C</option>
-            <option value="Ctrl+Shift+X">Ctrl + Shift + X</option>
-            <option value="F11">F11</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <div id="copyHotkeyCustomRow" style="display:none; margin-top:6px;">
-            <input id="copyHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
-              style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
-          </div>
-        </div>
-        <div id="copyHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
-          Puts the most recent transcription on the clipboard — useful for apps that block direct injection (RustDesk, etc.). Then press Ctrl+V where you want it.
-        </div>
-
-        <div id="ttsEngineGroup" class="setting-group" style="display:none;">
-          <label>Voice engine</label>
-          <select id="ttsEngineSelect">
-            <option value="sapi">Windows (built-in)</option>
-            <option value="piper">Piper (neural, better quality)</option>
-            <option value="minimax">Minimax (cloud, highest quality)</option>
-          </select>
-        </div>
-
-        <div id="minimaxGroup" style="display:none;">
-          <div class="setting-group">
-            <label>Minimax API key</label>
-            <div style="display:flex; gap:6px; align-items:center;">
-              <input id="minimaxApiKeyInput" type="password" placeholder="Enter your Minimax API key..."
-                style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;box-sizing:border-box;">
-              <button id="minimaxTestBtn"
-                style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--accent);color:#fff;font-size:11px;cursor:pointer;white-space:nowrap;">
-                Test
-              </button>
+        <!-- ── Appearance ─────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">Appearance</header>
+          <div class="setting-item">
+            <label class="setting-item-label" for="themeSelect">Theme</label>
+            <div class="setting-item-controls">
+              <select id="themeSelect">
+                <optgroup label="Default">
+                  <option value="dictator-dark">Dictator Dark</option>
+                  <option value="dictator-light">Dictator Light</option>
+                </optgroup>
+                <optgroup label="Mint">
+                  <option value="mint-dark">Mint Dark</option>
+                  <option value="mint-light">Mint Light</option>
+                </optgroup>
+                <optgroup label="Colorful">
+                  <option value="bubble-gum">Bubble Gum</option>
+                  <option value="ocean">Ocean</option>
+                  <option value="sunset">Sunset</option>
+                  <option value="dracula">Dracula</option>
+                </optgroup>
+                <optgroup label="Brand Inspired">
+                  <option value="discord">Discord</option>
+                  <option value="facebook">Facebook</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="youtube">YouTube</option>
+                  <option value="spotify">Spotify</option>
+                  <option value="twitter">Twitter / X</option>
+                  <option value="slack">Slack</option>
+                  <option value="netflix">Netflix</option>
+                  <option value="reddit">Reddit</option>
+                  <option value="twitch">Twitch</option>
+                </optgroup>
+                <optgroup label="Minimal">
+                  <option value="snow">Snow</option>
+                  <option value="midnight">Midnight</option>
+                </optgroup>
+              </select>
             </div>
-            <div id="minimaxTestResult" style="font-size:11px; margin-top:4px; display:none;"></div>
           </div>
-          <div class="setting-group">
-            <label>Minimax voice</label>
-            <select id="minimaxVoiceSelect"></select>
-          </div>
-        </div>
+        </section>
 
-        <div id="ttsVoiceGroup" class="setting-group" style="display:none;">
-          <label>Voice</label>
-          <select id="ttsVoiceSelect"></select>
-        </div>
+        <!-- ── Hands-free ─────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">Hands-free</header>
 
-        <div id="piperSetupArea" style="display:none; margin:-6px 0 12px; padding:10px 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
-          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="piperSetupLabel"></div>
-          <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
-            <div id="piperProgressFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
-          </div>
-          <div id="piperProgressStatus" style="font-size:11px; color:var(--text-muted); margin-top:4px;"></div>
-        </div>
-
-        <div id="piperVoiceGroup" style="display:none; margin-bottom:12px;">
-          <details id="piperVoiceDetails">
-            <summary style="font-size:13px; color:var(--text-dim); cursor:pointer; user-select:none; padding:4px 0;">
-              Piper voices <span id="piperVoiceSummary" style="font-size:11px; color:var(--text-muted);"></span>
-            </summary>
-            <div id="piperVoiceList" style="display:flex; flex-direction:column; gap:6px; margin-top:8px; max-height:280px; overflow-y:auto;"></div>
-          </details>
-        </div>
-
-        <div class="setting-group">
-          <label>Microphone</label>
-          <select id="micDevice">
-            <option value="">System default</option>
-          </select>
-        </div>
-
-        <div class="setting-row">
-          <label>Add space after insert</label>
-          <div class="toggle on" id="autoSpaceToggle"></div>
-        </div>
-
-        <div class="setting-row">
-          <label>Live preview</label>
-          <div class="toggle" id="livePreviewToggle"></div>
-        </div>
-        <div id="livePreviewHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px;">
-          Shows rough streaming text while recording. Requires GPU for smooth performance. Does not affect final output.
-        </div>
-
-        <div class="setting-row">
-          <label>Start on boot</label>
-          <div class="toggle" id="autostartToggle"></div>
-        </div>
-
-        <div class="setting-row">
-          <label>Sound effects</label>
-          <div class="toggle" id="soundToggle"></div>
-        </div>
-        <div class="setting-row" id="progressBeepRow" style="display:none; padding-left:18px;">
-          <label style="font-size:12px; color:var(--text-muted);">Progress beeps</label>
-          <div class="toggle" id="progressBeepToggle"></div>
-        </div>
-
-        <div class="setting-row">
-          <label>Force CPU mode</label>
-          <div class="toggle" id="forceCpuToggle"></div>
-        </div>
-        <div id="forceCpuHint" style="display:none; font-size:11px; color:var(--text-muted); padding:0 0 8px 4px;">
-          Models will reload on CPU next time they're used
-        </div>
-
-        <!-- Detected-GPU diagnostic. Populated from get_gpu_status.gpu_summary
-             + llm_gpu_capable so users can see what Vulkan enumeration found
-             and why LLM might be staying on CPU even when Whisper is on GPU. -->
-        <div id="gpuDiagnosticRow" style="display:none; padding:8px 10px; margin:4px 0 10px; background:var(--bg-elev); border:1px solid var(--border); border-radius:6px; font-size:11px; color:var(--text-muted); line-height:1.45;">
-          <div><strong id="gpuDiagName" style="color:var(--text);"></strong></div>
-          <div id="gpuDiagDetail"></div>
-        </div>
-
-        <div id="gpuRecoveryRow" style="display:none; padding:10px 12px; margin:4px 0 12px; background:var(--bg-elev); border:1px solid var(--border); border-radius:6px;">
-          <div style="font-size:12px; color:var(--text); margin-bottom:6px;">
-            <strong>GPU disabled this session</strong>
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px; line-height:1.4;">
-            The previous session didn't shut down cleanly — usually from a GPU driver
-            issue after sleep/resume. GPU has been skipped to keep things stable.
-            You can retry now, or restart the app to try GPU again automatically.
-          </div>
-          <button id="retryGpuBtn" style="font-size:12px; padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer;">Try GPU Again</button>
-        </div>
-
-        <div class="setting-group">
-          <label>Silence reminder</label>
-          <select id="silenceReminderSelect">
-            <option value="0">Off</option>
-            <option value="10">10 seconds</option>
-            <option value="15">15 seconds</option>
-            <option value="20">20 seconds</option>
-            <option value="30">30 seconds (default)</option>
-            <option value="45">45 seconds</option>
-            <option value="60">60 seconds</option>
-          </select>
-        </div>
-
-        <div class="setting-row">
-          <label id="autoFormatLabel">Auto-format with AI</label>
-          <div class="toggle" id="autoFormatToggle"></div>
-        </div>
-        <div id="autoFormatHint" style="font-size:11px; color:var(--text-muted); margin:-10px 0 12px; display:none;">
-          Adds 5-15 sec processing time after transcription
-        </div>
-        <div id="modelDownloadArea" style="display:none; margin:-6px 0 12px; padding:10px 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
-          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="downloadLabel">Downloading AI model...</div>
-          <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
-            <div id="downloadFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;" id="downloadStatus"></div>
-        </div>
-
-        <div class="setting-group" id="autoFormatTypeGroup" style="display:none;">
-          <label>Auto-format style</label>
-          <select id="autoFormatType">
-            <option value="light_clean_up">Light cleanup</option>
-            <option value="clean_up">Clean up</option>
-            <option value="strict_clean_up">Strict cleanup</option>
-            <option value="casual_email">Casual email</option>
-            <option value="professional_email">Professional email</option>
-            <option value="formal_letter">Formal letter</option>
-            <option value="bullet_summary">Bullet summary</option>
-            <option value="meeting_notes">Meeting notes</option>
-            <option value="documentation">Documentation</option>
-            <option value="message">Message</option>
-          </select>
-        </div>
-
-        <!-- Strict cleanup user guidance. Appended to the Strict cleanup
-             prompt when that format is selected (auto-format, manual
-             Format button, or reformat-selection hotkey). Empty =
-             default prompt, same as before this feature existed. -->
-        <div class="setting-group" id="strictNotesGroup">
-          <label for="strictNotesInput">Strict cleanup guidance (optional)</label>
-          <textarea
-            id="strictNotesInput"
-            rows="3"
-            placeholder="e.g. focus on action items · keep technical terms exact · make it more concise"
-            style="
-              width:100%; font-size:12px; font-family:inherit; color:var(--text);
-              background:var(--bg); border:1px solid var(--border); border-radius:6px;
-              padding:8px; resize:vertical; line-height:1.4; box-sizing:border-box;
-            "
-          ></textarea>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
-            Only applied when Strict cleanup is the active format. Other cleanup tiers and format types ignore these notes.
-          </div>
-        </div>
-
-        <div id="templateEditorGroup" style="display:none; margin-bottom:12px;">
-          <details id="templateEditorDetails">
-            <summary style="font-size:12px; color:var(--text-muted); cursor:pointer; user-select:none; padding:4px 0;">
-              Edit format prompts
-            </summary>
-            <div style="margin-top:8px;">
-              <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">
-                Editing prompt for: <strong id="templateEditingLabel">Clean up</strong>
-                <span id="templateCustomBadge" style="display:none; font-size:10px; color:var(--warning); margin-left:6px;">customized</span>
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Auto-stop on silence</label>
+              <div class="toggle" id="autoStopToggle"></div>
+            </div>
+            <div class="setting-item-hint">Recording auto-ends after you stop talking for this long.</div>
+            <div id="autoStopOptions" class="setting-item-controls" style="display:none;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="white-space:nowrap; font-size:11px; color:var(--text-muted);">Silence span</span>
+                <input type="range" id="autoStopSecsSlider" min="0.5" max="5" step="0.5" value="2" style="flex:1;">
+                <span id="autoStopSecsLabel" style="white-space:nowrap; min-width:36px; text-align:right; color:var(--text); font-size:11px;">2.0s</span>
               </div>
-              <textarea id="templateTextarea" rows="5" style="
-                width:100%; font-size:12px; font-family:inherit; color:var(--text);
-                background:var(--bg); border:1px solid var(--border); border-radius:6px;
-                padding:8px; resize:vertical; line-height:1.4;
-              "></textarea>
-              <div style="display:flex; gap:6px; margin-top:6px;">
-                <button id="templateSaveBtn" style="
-                  flex:1; padding:5px 0; font-size:12px; border:none; border-radius:4px;
-                  background:var(--accent); color:#000; cursor:pointer;
-                ">Save</button>
-                <button id="templateResetBtn" style="
-                  flex:1; padding:5px 0; font-size:12px; border:none; border-radius:4px;
-                  background:var(--border); color:var(--text); cursor:pointer;
-                ">Reset to Default</button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Wake word</label>
+              <div class="toggle" id="wakeWordToggle"></div>
+            </div>
+            <div class="setting-item-hint">
+              Pick a phrase from the list — powered by
+              <a href="https://github.com/dscripka/openWakeWord" target="_blank" style="color:var(--accent);">OpenWakeWord</a>
+              pre-trained models, no recording or training needed. The list is fixed for now;
+              custom user-trained phrases proved unstable in real-room testing and may be added
+              later if a more reliable approach surfaces. Pairs well with auto-stop above.
+            </div>
+            <div id="wakeWordOptions" class="setting-item-controls">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="white-space:nowrap; font-size:11px; color:var(--text-muted);">Phrase</span>
+                <select id="wakeWordPhraseSelect" style="flex:1; padding:4px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:12px;">
+                </select>
               </div>
-              <div id="templateStatus" style="font-size:11px; color:var(--accent); margin-top:4px; min-height:14px;"></div>
+              <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+                <span style="white-space:nowrap; font-size:11px; color:var(--text-muted);">Sensitivity</span>
+                <input type="range" id="wakeWordThresholdSlider" min="0.30" max="0.90" step="0.05" value="0.50" style="flex:1;">
+                <span id="wakeWordThresholdLabel" style="white-space:nowrap; min-width:36px; text-align:right; color:var(--text); font-size:11px;">0.50</span>
+              </div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+                0.5 is the default. Push higher (0.6–0.7) if you get false positives.
+              </div>
+              <div id="wakeWordStatus" style="margin-top:6px; color:var(--text-muted); font-size:11px; min-height:14px;"></div>
+              <div id="wakeWordScoreRow" style="margin-top:2px; color:var(--text-muted); font-size:11px; min-height:14px; display:none;">
+                <span>Live score: </span><span id="wakeWordScoreValue" style="font-variant-numeric: tabular-nums;">0.00</span>
+                <span> / target </span><span id="wakeWordScoreTarget" style="font-variant-numeric: tabular-nums;">0.50</span>
+                <div style="margin-top:4px; height:4px; background:var(--border); border-radius:2px; overflow:hidden;">
+                  <div id="wakeWordScoreBar" style="height:100%; width:0%; background:var(--accent); transition:width 120ms linear;"></div>
+                </div>
+              </div>
             </div>
-          </details>
-        </div>
-
-        <!-- Word-replacement bank. Applied after Whisper output, before LLM
-             formatting / inject. Each row is a {from, to} pair — whole-word
-             case-insensitive. Fixes persistent Whisper mishears (proper
-             nouns, brand names). Rows with blank From are dropped on save. -->
-        <div class="setting-group">
-          <label>Word replacements</label>
-          <div style="font-size:11px; color:var(--text-muted); margin:-4px 0 8px; line-height:1.4;">
-            Fix words Whisper gets wrong — e.g. "clod" → "Claude". Case-insensitive whole-word match, applied after transcription.
           </div>
-          <div id="wordBankList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
-          <button id="wordBankAdd" style="font-size:12px; padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer;">+ Add replacement</button>
-        </div>
+        </section>
 
-        <div class="setting-group">
-          <label>Insertion mode</label>
-          <select id="injectionMode">
-            <option value="paste" selected>Clipboard paste (fast)</option>
-            <option value="type">Simulated typing (compatible)</option>
-          </select>
-        </div>
+        <!-- ── Recording ──────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">Recording</header>
 
-        <div class="setting-group">
-          <label>AI Models</label>
-          <div id="modelList" style="font-size:12px; color:var(--text-dim);"></div>
-          <details style="margin-top:8px;">
-            <summary style="font-size:11px; color:var(--text-muted); cursor:pointer; user-select:none;">Using your own models</summary>
-            <div id="customModelInfo" style="font-size:11px; color:var(--text-muted); margin-top:6px; padding:8px 10px; background:var(--bg); border-radius:6px; line-height:1.5;">
-              You can add your own GGUF models manually.<br>
-              <b>Format:</b> GGUF only (.gguf files)<br>
-              <b>Location:</b> <code id="modelsDirPath" style="font-size:10px; background:var(--border); padding:1px 4px; border-radius:3px; word-break:break-all;"></code><br>
-              <b>Naming:</b> Any filename works. The app auto-detects Phi-3 and Llama 3 chat formats from the filename. Other models use Llama 3 format by default.<br>
-              <b>Tip:</b> Q4_K_M quantizations offer the best balance of speed and quality.
+          <div class="setting-item">
+            <label class="setting-item-label" for="micDevice">Microphone</label>
+            <div class="setting-item-controls">
+              <select id="micDevice">
+                <option value="">System default</option>
+              </select>
             </div>
-          </details>
-        </div>
-
-        <div id="versionInfo" style="font-size:11px; color:var(--text-muted); margin:4px 0; text-align:right;"></div>
-
-        <hr style="border:none; border-top:1px solid var(--border); margin:24px 0 20px;">
-        <details style="margin-bottom:16px;">
-          <summary style="font-size:13px; color:var(--danger); cursor:pointer; user-select:none; padding:4px 0; font-weight:600;">
-            Uninstall
-          </summary>
-          <div style="margin-top:12px;">
-            <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px; line-height:1.6;">
-              Remove all downloaded models, certificates, settings, and the autostart entry. After cleanup you can delete the app folder.
-            </div>
-            <button id="uninstallBtn" style="
-              background: var(--danger-glow);
-              border: 1px solid var(--danger);
-              color: var(--danger);
-              border-radius: 8px;
-              padding: 10px 16px;
-              font-size: 13px;
-              font-weight: 600;
-              cursor: pointer;
-              width: 100%;
-              transition: border-color 0.15s, color 0.15s;
-            ">Remove all app data</button>
-            <div id="uninstallResult" style="display:none; margin-top:14px; padding:14px 16px; border-radius:10px; font-size:12px; line-height:1.6;"></div>
           </div>
-        </details>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Live preview</label>
+              <div class="toggle" id="livePreviewToggle"></div>
+            </div>
+            <div class="setting-item-hint" id="livePreviewHint">
+              <strong style="color:var(--warning);">Early access</strong> — shows rough streaming text while recording. Quality varies, requires GPU for smooth performance. Does not affect the final transcription.
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Add space after insert</label>
+              <div class="toggle on" id="autoSpaceToggle"></div>
+            </div>
+            <div class="setting-item-hint">Auto-appends a space after injected text so consecutive dictations don't run together.</div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="injectionMode">Insertion mode</label>
+            <div class="setting-item-controls">
+              <select id="injectionMode">
+                <option value="paste" selected>Clipboard paste (fast)</option>
+                <option value="type">Simulated typing (compatible)</option>
+              </select>
+            </div>
+            <div class="setting-item-hint">Paste is faster. Use Simulated typing if a target app blocks Ctrl+V (some remote-desktop / VDI clients).</div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="silenceReminderSelect">Silence reminder</label>
+            <div class="setting-item-controls">
+              <select id="silenceReminderSelect">
+                <option value="0">Off</option>
+                <option value="10">10 seconds</option>
+                <option value="15">15 seconds</option>
+                <option value="20">20 seconds</option>
+                <option value="30">30 seconds (default)</option>
+                <option value="45">45 seconds</option>
+                <option value="60">60 seconds</option>
+              </select>
+            </div>
+            <div class="setting-item-hint">Visual nudge during recording if you've been silent for this long. Distinct from auto-stop above — this just reminds, doesn't end the recording.</div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label">Word replacements</label>
+            <div class="setting-item-hint">
+              Fix words Whisper gets wrong — e.g. "clod" → "Claude". Case-insensitive whole-word match, applied after transcription.
+            </div>
+            <div class="setting-item-controls">
+              <div id="wordBankList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
+              <button id="wordBankAdd" style="font-size:12px; padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer;">+ Add replacement</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Hotkeys ────────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">Hotkeys</header>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="hotkeySelect">Recording (start / stop)</label>
+            <div class="setting-item-controls">
+              <select id="hotkeySelect">
+                <option value="Ctrl+Shift+Space">Ctrl + Shift + Space</option>
+                <option value="Ctrl+Shift+D">Ctrl + Shift + D</option>
+                <option value="Ctrl+Alt+Space">Ctrl + Alt + Space</option>
+                <option value="F9">F9</option>
+                <option value="Ctrl+F9">Ctrl + F9</option>
+                <option value="none">Disabled</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <div id="hotkeyCustomRow" style="display:none; margin-top:6px;">
+                <input id="hotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+                  style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="injectHotkeySelect">Insert at cursor</label>
+            <div class="setting-item-controls">
+              <select id="injectHotkeySelect">
+                <option value="none">Disabled</option>
+                <option value="Ctrl+Shift+V">Ctrl + Shift + V</option>
+                <option value="Ctrl+Shift+I">Ctrl + Shift + I</option>
+                <option value="F10">F10</option>
+                <option value="Ctrl+F10">Ctrl + F10</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <div id="injectHotkeyCustomRow" style="display:none; margin-top:6px;">
+                <input id="injectHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+                  style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+              </div>
+            </div>
+            <div class="setting-item-hint">Pastes the most recent transcription at your cursor.</div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="ttsHotkeySelect">Read aloud</label>
+            <div class="setting-item-controls">
+              <select id="ttsHotkeySelect">
+                <option value="none">Disabled</option>
+                <option value="Ctrl+Shift+R">Ctrl + Shift + R</option>
+                <option value="Ctrl+Shift+T">Ctrl + Shift + T</option>
+                <option value="F11">F11</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <div id="ttsHotkeyCustomRow" style="display:none; margin-top:6px;">
+                <input id="ttsHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+                  style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+              </div>
+            </div>
+            <div id="ttsHint" class="setting-item-hint" style="display:none;">Highlight text anywhere, press hotkey to hear it read aloud.</div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="reformatHotkeySelect">Reformat selection</label>
+            <div class="setting-item-controls">
+              <select id="reformatHotkeySelect">
+                <option value="none">Disabled</option>
+                <option value="Ctrl+Shift+F">Ctrl + Shift + F</option>
+                <option value="Ctrl+Shift+G">Ctrl + Shift + G</option>
+                <option value="F12">F12</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <div id="reformatHotkeyCustomRow" style="display:none; margin-top:6px;">
+                <input id="reformatHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+                  style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+              </div>
+            </div>
+            <div id="reformatHint" class="setting-item-hint" style="display:none;">Highlight text anywhere, press hotkey to reformat with AI.</div>
+          </div>
+
+          <div class="setting-item">
+            <label class="setting-item-label" for="copyHotkeySelect">Copy last transcription to clipboard</label>
+            <div class="setting-item-controls">
+              <select id="copyHotkeySelect">
+                <option value="none">Disabled</option>
+                <option value="Ctrl+Shift+C">Ctrl + Shift + C</option>
+                <option value="Ctrl+Shift+X">Ctrl + Shift + X</option>
+                <option value="F11">F11</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <div id="copyHotkeyCustomRow" style="display:none; margin-top:6px;">
+                <input id="copyHotkeyCustomInput" type="text" readonly placeholder="Press a key combo..."
+                  style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface, rgba(255,255,255,0.04));color:var(--text);font-size:12px;cursor:pointer;box-sizing:border-box;">
+              </div>
+            </div>
+            <div id="copyHint" class="setting-item-hint" style="display:none;">
+              Puts the most recent transcription on the clipboard — useful for apps that block direct injection (RustDesk, etc.). Then press Ctrl+V where you want it.
+            </div>
+          </div>
+        </section>
+
+        <!-- ── AI formatting ──────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">AI formatting</header>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label id="autoFormatLabel">Auto-format with AI</label>
+              <div class="toggle" id="autoFormatToggle"></div>
+            </div>
+            <div id="autoFormatHint" class="setting-item-hint" style="display:none;">
+              Adds 5–15 sec processing time after transcription.
+            </div>
+            <div id="modelDownloadArea" class="setting-item-controls" style="display:none;">
+              <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="downloadLabel">Downloading AI model...</div>
+              <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+                <div id="downloadFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
+              </div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;" id="downloadStatus"></div>
+            </div>
+          </div>
+
+          <div class="setting-item" id="autoFormatTypeGroup" style="display:none;">
+            <label class="setting-item-label" for="autoFormatType">Auto-format style</label>
+            <div class="setting-item-controls">
+              <select id="autoFormatType">
+                <option value="light_clean_up">Light cleanup</option>
+                <option value="clean_up">Clean up</option>
+                <option value="strict_clean_up">Strict cleanup</option>
+                <option value="casual_email">Casual email</option>
+                <option value="professional_email">Professional email</option>
+                <option value="formal_letter">Formal letter</option>
+                <option value="bullet_summary">Bullet summary</option>
+                <option value="meeting_notes">Meeting notes</option>
+                <option value="documentation">Documentation</option>
+                <option value="message">Message</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="setting-item" id="strictNotesGroup">
+            <label class="setting-item-label" for="strictNotesInput">Strict cleanup guidance (optional)</label>
+            <div class="setting-item-controls">
+              <textarea
+                id="strictNotesInput"
+                rows="3"
+                placeholder="e.g. focus on action items · keep technical terms exact · make it more concise"
+                style="
+                  width:100%; font-size:12px; font-family:inherit; color:var(--text);
+                  background:var(--bg); border:1px solid var(--border); border-radius:6px;
+                  padding:8px; resize:vertical; line-height:1.4; box-sizing:border-box;
+                "
+              ></textarea>
+            </div>
+            <div class="setting-item-hint">
+              Only applied when Strict cleanup is the active format. Other tiers ignore these notes.
+            </div>
+          </div>
+
+          <div class="setting-item" id="templateEditorGroup" style="display:none;">
+            <details id="templateEditorDetails">
+              <summary style="font-size:13px; color:var(--text); cursor:pointer; user-select:none; font-weight:500;">
+                Edit format prompts
+              </summary>
+              <div style="margin-top:10px;">
+                <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">
+                  Editing prompt for: <strong id="templateEditingLabel" style="color:var(--text);">Clean up</strong>
+                  <span id="templateCustomBadge" style="display:none; font-size:10px; color:var(--warning); margin-left:6px;">customized</span>
+                </div>
+                <textarea id="templateTextarea" rows="5" style="
+                  width:100%; font-size:12px; font-family:inherit; color:var(--text);
+                  background:var(--bg); border:1px solid var(--border); border-radius:6px;
+                  padding:8px; resize:vertical; line-height:1.4; box-sizing:border-box;
+                "></textarea>
+                <div style="display:flex; gap:6px; margin-top:6px;">
+                  <button id="templateSaveBtn" style="
+                    flex:1; padding:5px 0; font-size:12px; border:none; border-radius:4px;
+                    background:var(--accent); color:#000; cursor:pointer;
+                  ">Save</button>
+                  <button id="templateResetBtn" style="
+                    flex:1; padding:5px 0; font-size:12px; border:none; border-radius:4px;
+                    background:var(--border); color:var(--text); cursor:pointer;
+                  ">Reset to Default</button>
+                </div>
+                <div id="templateStatus" style="font-size:11px; color:var(--accent); margin-top:4px; min-height:14px;"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <!-- ── Read aloud (Text-to-Speech) ────────────────────────── -->
+        <section class="settings-section" id="ttsSection">
+          <header class="settings-section-header">Read aloud (Text-to-Speech)</header>
+
+          <div class="setting-item" id="ttsEngineGroup" style="display:none;">
+            <label class="setting-item-label" for="ttsEngineSelect">Voice engine</label>
+            <div class="setting-item-controls">
+              <select id="ttsEngineSelect">
+                <option value="sapi">Windows (built-in)</option>
+                <option value="piper">Piper (neural, better quality)</option>
+                <option value="minimax">Minimax (cloud, highest quality)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="setting-item" id="minimaxGroup" style="display:none;">
+            <label class="setting-item-label" for="minimaxApiKeyInput">Minimax API key</label>
+            <div class="setting-item-controls">
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="minimaxApiKeyInput" type="password" placeholder="Enter your Minimax API key..."
+                  style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12px;box-sizing:border-box;">
+                <button id="minimaxTestBtn"
+                  style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--accent);color:#fff;font-size:11px;cursor:pointer;white-space:nowrap;">
+                  Test
+                </button>
+              </div>
+              <div id="minimaxTestResult" style="font-size:11px; margin-top:4px; display:none;"></div>
+              <div style="margin-top:10px;">
+                <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Minimax voice</label>
+                <select id="minimaxVoiceSelect"></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-item" id="ttsVoiceGroup" style="display:none;">
+            <label class="setting-item-label" for="ttsVoiceSelect">Voice</label>
+            <div class="setting-item-controls">
+              <select id="ttsVoiceSelect"></select>
+            </div>
+          </div>
+
+          <div class="setting-item" id="piperSetupArea" style="display:none;">
+            <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" id="piperSetupLabel"></div>
+            <div style="width:100%; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+              <div id="piperProgressFill" style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition:width 0.3s;"></div>
+            </div>
+            <div id="piperProgressStatus" style="font-size:11px; color:var(--text-muted); margin-top:4px;"></div>
+          </div>
+
+          <div class="setting-item" id="piperVoiceGroup" style="display:none;">
+            <details id="piperVoiceDetails">
+              <summary style="font-size:13px; color:var(--text); cursor:pointer; user-select:none; font-weight:500;">
+                Piper voices <span id="piperVoiceSummary" style="font-size:11px; color:var(--text-muted); font-weight:normal;"></span>
+              </summary>
+              <div id="piperVoiceList" style="display:flex; flex-direction:column; gap:6px; margin-top:10px; max-height:280px; overflow-y:auto;"></div>
+            </details>
+          </div>
+        </section>
+
+        <!-- ── Phone & Remote ─────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">Phone &amp; Remote</header>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>LAN server (phone as mic)</label>
+              <div class="toggle" id="lanServerToggle"></div>
+            </div>
+            <div id="lanServerHint" class="setting-item-hint">
+              Off by default. Turn on to let your phone connect over Wi-Fi. With this off, Dictator runs fully local with no open ports.
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Tailscale (remote access)</label>
+              <div class="toggle" id="tailscaleToggle"></div>
+            </div>
+            <div id="tailscaleHint" class="setting-item-hint" style="display:none;">
+              Requires <a href="https://tailscale.com/" target="_blank" style="color:var(--accent);">Tailscale</a> on both PC and phone. Enables trusted HTTPS from anywhere.
+            </div>
+          </div>
+        </section>
+
+        <!-- ── System ─────────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">System</header>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Start on boot</label>
+              <div class="toggle" id="autostartToggle"></div>
+            </div>
+            <div class="setting-item-hint">Launches Dictator automatically when you sign in to Windows.</div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Sound effects</label>
+              <div class="toggle" id="soundToggle"></div>
+            </div>
+            <div class="setting-item-hint">Audible cues for record start/stop, transcription complete, errors.</div>
+            <div id="progressBeepRow" class="setting-item-controls" style="display:none;">
+              <div style="display:flex; align-items:center; justify-content:space-between;">
+                <label style="font-size:12px; color:var(--text-muted);">Progress beeps during transcription</label>
+                <div class="toggle" id="progressBeepToggle"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Force CPU mode</label>
+              <div class="toggle" id="forceCpuToggle"></div>
+            </div>
+            <div id="forceCpuHint" class="setting-item-hint" style="display:none;">
+              Models will reload on CPU next time they're used.
+            </div>
+            <div id="gpuDiagnosticRow" class="setting-item-controls" style="display:none;">
+              <div style="padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; font-size:11px; color:var(--text-muted); line-height:1.45;">
+                <div><strong id="gpuDiagName" style="color:var(--text);"></strong></div>
+                <div id="gpuDiagDetail"></div>
+              </div>
+            </div>
+            <div id="gpuRecoveryRow" class="setting-item-controls" style="display:none;">
+              <div style="padding:10px 12px; background:var(--bg); border:1px solid var(--border); border-radius:6px;">
+                <div style="font-size:12px; color:var(--text); margin-bottom:6px;">
+                  <strong>GPU disabled this session</strong>
+                </div>
+                <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px; line-height:1.4;">
+                  The previous session didn't shut down cleanly — usually from a GPU driver
+                  issue after sleep/resume. GPU has been skipped to keep things stable.
+                  You can retry now, or restart the app to try GPU again automatically.
+                </div>
+                <button id="retryGpuBtn" style="font-size:12px; padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer;">Try GPU Again</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Models ─────────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">Models</header>
+          <div class="setting-item">
+            <label class="setting-item-label">AI Models</label>
+            <div class="setting-item-controls">
+              <div id="modelList" style="font-size:12px; color:var(--text-dim);"></div>
+              <details style="margin-top:8px;">
+                <summary style="font-size:11px; color:var(--text-muted); cursor:pointer; user-select:none;">Using your own models</summary>
+                <div id="customModelInfo" style="font-size:11px; color:var(--text-muted); margin-top:6px; padding:8px 10px; background:var(--bg); border-radius:6px; line-height:1.5;">
+                  You can add your own GGUF models manually.<br>
+                  <b>Format:</b> GGUF only (.gguf files)<br>
+                  <b>Location:</b> <code id="modelsDirPath" style="font-size:10px; background:var(--border); padding:1px 4px; border-radius:3px; word-break:break-all;"></code><br>
+                  <b>Naming:</b> Any filename works. The app auto-detects Phi-3 and Llama 3 chat formats from the filename. Other models use Llama 3 format by default.<br>
+                  <b>Tip:</b> Q4_K_M quantizations offer the best balance of speed and quality.
+                </div>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── About ──────────────────────────────────────────────── -->
+        <section class="settings-section">
+          <header class="settings-section-header">About</header>
+          <div class="setting-item">
+            <div class="setting-item-row">
+              <label>Version</label>
+              <span id="versionInfo" style="font-size:12px; color:var(--text-muted);"></span>
+            </div>
+          </div>
+          <div class="setting-item">
+            <details>
+              <summary style="font-size:13px; color:var(--danger); cursor:pointer; user-select:none; font-weight:600;">
+                Uninstall
+              </summary>
+              <div style="margin-top:12px;">
+                <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px; line-height:1.6;">
+                  Remove all downloaded models, certificates, settings, and the autostart entry. After cleanup you can delete the app folder.
+                </div>
+                <button id="uninstallBtn" style="
+                  background: var(--danger-glow);
+                  border: 1px solid var(--danger);
+                  color: var(--danger);
+                  border-radius: 8px;
+                  padding: 10px 16px;
+                  font-size: 13px;
+                  font-weight: 600;
+                  cursor: pointer;
+                  width: 100%;
+                  transition: border-color 0.15s, color 0.15s;
+                ">Remove all app data</button>
+                <div id="uninstallResult" style="display:none; margin-top:14px; padding:14px 16px; border-radius:10px; font-size:12px; line-height:1.6;"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+
       </div>
     </div>
   </div>
@@ -1729,6 +1966,228 @@
       }
     });
 
+    // ── Hands-free recording: silence auto-stop + wake word ──────────────
+    // Both opt-in. localStorage owns the persisted state; we push values to
+    // the Rust backend on init and on every change so a fresh recording
+    // session sees the current settings. Wake-word listener is restarted
+    // by the recording-finished branch so the user can say the phrase again
+    // without manually toggling.
+
+    const autoStopToggle = document.getElementById('autoStopToggle');
+    const autoStopOptions = document.getElementById('autoStopOptions');
+    const autoStopSecsSlider = document.getElementById('autoStopSecsSlider');
+    const autoStopSecsLabel = document.getElementById('autoStopSecsLabel');
+
+    let autoStopEnabled = localStorage.getItem('dictator-auto-stop-enabled') === '1';
+    let autoStopSecs = parseFloat(localStorage.getItem('dictator-auto-stop-secs') || '2');
+    if (!Number.isFinite(autoStopSecs) || autoStopSecs < 0.5 || autoStopSecs > 5) autoStopSecs = 2;
+
+    function applyAutoStopVisuals() {
+      autoStopToggle.classList.toggle('on', autoStopEnabled);
+      autoStopOptions.style.display = autoStopEnabled ? 'block' : 'none';
+      autoStopSecsSlider.value = String(autoStopSecs);
+      autoStopSecsLabel.textContent = autoStopSecs.toFixed(1) + 's';
+    }
+    applyAutoStopVisuals();
+
+    autoStopToggle.addEventListener('click', async () => {
+      autoStopEnabled = !autoStopEnabled;
+      localStorage.setItem('dictator-auto-stop-enabled', autoStopEnabled ? '1' : '0');
+      applyAutoStopVisuals();
+      try { await invoke('set_auto_stop', { enabled: autoStopEnabled }); } catch (_) {}
+    });
+
+    autoStopSecsSlider.addEventListener('input', () => {
+      autoStopSecs = parseFloat(autoStopSecsSlider.value);
+      autoStopSecsLabel.textContent = autoStopSecs.toFixed(1) + 's';
+    });
+    autoStopSecsSlider.addEventListener('change', async () => {
+      localStorage.setItem('dictator-auto-stop-secs', String(autoStopSecs));
+      try { await invoke('set_auto_stop_secs', { secs: autoStopSecs }); } catch (_) {}
+    });
+
+    // Auto-stop fires by emitting `auto-stop-recording`; we just trigger the
+    // same code path as a hotkey press — micBtn.click() handles "is recording
+    // → stop" naturally. Guard so we don't accidentally toggle when idle.
+    listen('auto-stop-recording', () => {
+      if (isRecording && !micBtn.classList.contains('disabled')) {
+        hotkeyTriggered = true; // route the result through the hotkey path
+        micBtn.click();
+      }
+    });
+
+    // Auto-cancel: the watchdog saw no speech at all within the grace
+    // window. Drop the recording without transcribing — anything we'd
+    // pass to Whisper is just ambient room noise. Mirrors the Escape
+    // cancel path so the UI ends up in the same clean state.
+    listen('auto-cancel-recording', async () => {
+      if (!isRecording || micBtn.classList.contains('disabled')) return;
+      try { await invoke('cancel_recording'); } catch (_) {}
+      isRecording = false;
+      emit('recording-state-changed', 'false');
+      hideRecordingTip();
+      micBtn.classList.remove('recording');
+      if (recTimerInterval) clearInterval(recTimerInterval);
+      recTimerInterval = null;
+      recTimerEl.textContent = '';
+      recTimerEl.classList.remove('warning');
+      progressFill.style.width = '0%';
+      setStatus('ready', 'Ready — click the mic to record');
+      micHint.textContent = 'No speech detected — listening again';
+      stopSilenceMonitor();
+      stopProgressBeeps();
+      // Soft tone rather than the error sound — cancelling on silence
+      // isn't really a failure, it's the expected outcome of "say wake
+      // word, change your mind".
+      setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
+      updateEscapeShortcut();
+      // Re-arm wake word so the user can try again without re-toggling.
+      if (wakeWordEnabled) {
+        startWakeWordListener();
+      }
+    });
+
+    const wakeWordToggle = document.getElementById('wakeWordToggle');
+    const wakeWordOptions = document.getElementById('wakeWordOptions');
+    const wakeWordPhraseSelect = document.getElementById('wakeWordPhraseSelect');
+    const wakeWordStatus = document.getElementById('wakeWordStatus');
+    const wakeWordThresholdSlider = document.getElementById('wakeWordThresholdSlider');
+    const wakeWordThresholdLabel = document.getElementById('wakeWordThresholdLabel');
+    const wakeWordScoreRow = document.getElementById('wakeWordScoreRow');
+    const wakeWordScoreValue = document.getElementById('wakeWordScoreValue');
+    const wakeWordScoreTarget = document.getElementById('wakeWordScoreTarget');
+    const wakeWordScoreBar = document.getElementById('wakeWordScoreBar');
+
+    let wakeWordEnabled = localStorage.getItem('dictator-wake-word-enabled') === '1';
+    let wakeWordPhraseId = localStorage.getItem('dictator-wake-word-phrase-id') || 'hey_jarvis';
+    let wakeWordThreshold = parseFloat(localStorage.getItem('dictator-wake-word-threshold') || '0.50');
+    if (!Number.isFinite(wakeWordThreshold) || wakeWordThreshold < 0.30 || wakeWordThreshold > 0.90) {
+      wakeWordThreshold = 0.50;
+    }
+    wakeWordThresholdSlider.value = String(wakeWordThreshold);
+    wakeWordThresholdLabel.textContent = wakeWordThreshold.toFixed(2);
+    wakeWordScoreTarget.textContent = wakeWordThreshold.toFixed(2);
+
+    // Populate the phrase dropdown from the backend's list. Doing this
+    // async means the dropdown is empty for a tick on launch — fine since
+    // the localStorage value still drives any "should the listener
+    // start?" decision.
+    (async () => {
+      try {
+        const phrases = await invoke('list_wake_word_phrases');
+        wakeWordPhraseSelect.innerHTML = phrases
+          .map(p => `<option value="${p.id}">${p.label}</option>`)
+          .join('');
+        wakeWordPhraseSelect.value = wakeWordPhraseId;
+      } catch (e) { /* ignore — settings not critical */ }
+    })();
+
+    wakeWordThresholdSlider.addEventListener('input', () => {
+      wakeWordThreshold = parseFloat(wakeWordThresholdSlider.value);
+      wakeWordThresholdLabel.textContent = wakeWordThreshold.toFixed(2);
+      wakeWordScoreTarget.textContent = wakeWordThreshold.toFixed(2);
+    });
+    wakeWordThresholdSlider.addEventListener('change', async () => {
+      localStorage.setItem('dictator-wake-word-threshold', String(wakeWordThreshold));
+      try { await invoke('set_wake_word_threshold', { threshold: wakeWordThreshold }); } catch (_) {}
+      // Restart so the new threshold rebuilds the detector at the new
+      // sensitivity. Skip if we're not currently listening.
+      if (wakeWordEnabled && !isRecording && !liveActive) {
+        await stopWakeWordListener();
+        await startWakeWordListener();
+      }
+    });
+
+    // Live score readout from the matcher task. Only meaningful while
+    // the listener is actively running, so we hide the row on stop.
+    listen('wake-word-score', (event) => {
+      const score = typeof event.payload === 'number' ? event.payload : 0;
+      wakeWordScoreValue.textContent = score.toFixed(2);
+      const pct = Math.max(0, Math.min(100, (score / wakeWordThreshold) * 100));
+      wakeWordScoreBar.style.width = pct + '%';
+    });
+    listen('wake-word-threshold', (event) => {
+      // Backend might have clamped the slider value — reflect what it
+      // actually used.
+      const t = typeof event.payload === 'number' ? event.payload : wakeWordThreshold;
+      wakeWordScoreTarget.textContent = t.toFixed(2);
+    });
+
+    function applyWakeWordVisuals() {
+      wakeWordToggle.classList.toggle('on', wakeWordEnabled);
+    }
+
+    function setWakeWordStatus(msg) {
+      if (wakeWordStatus) wakeWordStatus.textContent = msg || '';
+    }
+
+    async function startWakeWordListener() {
+      if (!wakeWordEnabled) return;
+      // Skip while the user is in the middle of recording — backend would
+      // refuse, and we'd just re-arm after stop_and_transcribe anyway.
+      if (isRecording || liveActive) return;
+      try {
+        await invoke('start_wake_word_listener');
+        setWakeWordStatus('Warming up the mic… (~2.5s)');
+        wakeWordScoreRow.style.display = 'block';
+        wakeWordScoreValue.textContent = '0.00';
+        wakeWordScoreBar.style.width = '0%';
+      } catch (e) {
+        setWakeWordStatus('Listener error: ' + e);
+        wakeWordScoreRow.style.display = 'none';
+      }
+    }
+
+    // Backend signals the warmup window has elapsed and detections are
+    // now real — flip the status text to "Listening…" so the user knows
+    // the wake word is actually live. Until this fires, detections are
+    // silently swallowed by the matcher.
+    listen('wake-word-warmed-up', () => {
+      setWakeWordStatus('Listening… say your phrase to start recording.');
+    });
+
+    async function stopWakeWordListener() {
+      try { await invoke('stop_wake_word_listener'); } catch (_) {}
+      setWakeWordStatus('');
+      wakeWordScoreRow.style.display = 'none';
+    }
+
+    wakeWordToggle.addEventListener('click', async () => {
+      wakeWordEnabled = !wakeWordEnabled;
+      localStorage.setItem('dictator-wake-word-enabled', wakeWordEnabled ? '1' : '0');
+      applyWakeWordVisuals();
+      if (wakeWordEnabled) {
+        await startWakeWordListener();
+      } else {
+        await stopWakeWordListener();
+      }
+    });
+
+    // Switching phrase rebuilds the detector with a different keyword
+    // model. We have to stop+start so the new model is actually loaded.
+    wakeWordPhraseSelect.addEventListener('change', async () => {
+      wakeWordPhraseId = wakeWordPhraseSelect.value;
+      localStorage.setItem('dictator-wake-word-phrase-id', wakeWordPhraseId);
+      try { await invoke('set_wake_word_phrase_id', { phraseId: wakeWordPhraseId }); } catch (_) {}
+      if (wakeWordEnabled && !isRecording && !liveActive) {
+        await stopWakeWordListener();
+        await startWakeWordListener();
+      }
+    });
+
+    applyWakeWordVisuals();
+
+    // Backend now releases the mic synchronously and emits the event
+    // afterwards, so we can fire the recording immediately — no safety
+    // delay needed. Was 250 ms in earlier builds back when the cpal
+    // release was async.
+    listen('wake-word-triggered', async () => {
+      if (isRecording || liveActive) return;
+      if (micBtn.classList.contains('disabled')) return;
+      hotkeyTriggered = true; // route output through the hotkey-injection path
+      micBtn.click();
+    });
+
     // ── Live mode state (hidden from UI, kept for internal code paths) ──
     let liveMode = false; // disabled — feature is shelved
     let liveActive = false;
@@ -1777,6 +2236,11 @@
         soundError();
         setTimeout(() => { micHint.textContent = 'Click to start recording'; }, 2000);
         updateEscapeShortcut();
+        // Cancelling on Escape also frees the mic — restart the wake-word
+        // listener so the user can re-trigger without re-toggling.
+        if (wakeWordEnabled) {
+          startWakeWordListener();
+        }
         return;
       }
       if (ttsState !== 'idle') {
@@ -1970,6 +2434,9 @@
           micBtn.classList.remove('disabled');
           micHint.textContent = 'Click to start recording';
           updateGpuStatus().catch(() => {});
+          // Whisper is loaded \u2014 wake-word listener can start now if the
+          // user had it enabled. Safe to call when disabled (no-op).
+          startWakeWordListener();
         } else if (event.payload === 'no-model') {
           clearInterval(pollStatus);
           setStatus('loading', 'No speech model installed');
@@ -2043,6 +2510,12 @@
             setStatus('ready', 'Ready \u2014 click the mic to record');
             micBtn.classList.remove('disabled');
             micHint.textContent = 'Click to start recording';
+            // Mirror the model-ready handler \u2014 without this, a fast
+            // model load that beats the listener registration leaves
+            // the wake-word listener un-started until the user happens
+            // to do a hotkey recording. Safe to call when wake word
+            // is disabled (no-op).
+            startWakeWordListener();
           } else if (status === 'no-model') {
             clearInterval(pollStatus);
             setStatus('loading', 'No speech model installed');
@@ -2341,6 +2814,12 @@
           previewActive = false;
           transcript.classList.remove('preview');
 
+          // Free the mic before the recording grabs it. When the wake-word
+          // listener fires, it tears down its own handle — but a manual
+          // hotkey/click while listening is still active would race two
+          // cpal streams for the same device.
+          await stopWakeWordListener();
+
           await invoke('start_recording');
           isRecording = true;
           emit('recording-state-changed', 'true');
@@ -2456,6 +2935,28 @@
         }
 
         micBtn.classList.remove('disabled');
+        // Re-arm the wake-word listener if it's still enabled. The backend
+        // tore down its handle when the trigger fired, and start_recording
+        // grabbed the mic — both are released by now. We wait an extra
+        // 2 s before actually starting the listener, though, because:
+        //   1. rustpotter's internal gain normalizer recalibrates on
+        //      whatever audio it sees first; if that audio is the click
+        //      after submit + paste artifacts + the user's exhale, the
+        //      "ambient floor" gets miscalibrated and any sound a moment
+        //      later then scores high enough to fire (we hit this loop
+        //      consistently after auto-stop submissions).
+        //   2. The 2.5 s warmup window inside the listener already runs
+        //      on top of this, so total post-recording silence is ~4.5 s
+        //      before detections fire — long enough that the gain
+        //      adapts to actual ambient, short enough that the user
+        //      isn't waiting forever to use it again.
+        if (wakeWordEnabled && !isRecording && !liveActive) {
+          setTimeout(() => {
+            if (wakeWordEnabled && !isRecording && !liveActive) {
+              startWakeWordListener();
+            }
+          }, 2000);
+        }
       }
     });
 
@@ -3903,6 +4404,11 @@
       localStorage.setItem('dictator-force-cpu', isOn ? '1' : '0');
       // Keep the tray menu label in sync.
       emit('sync-tray-freegpu', String(isOn));
+      // Stop the wake-word listener before the transcriber is unloaded —
+      // otherwise its live session will fire `Model not loaded` errors for
+      // every utterance until reload completes. The `model-ready` listener
+      // restarts it once the new model is up.
+      await stopWakeWordListener();
       try {
         await invoke('set_force_cpu', { force: isOn });
         // Reload the whisper model with the new GPU preference. On "Free GPU
@@ -4070,6 +4576,21 @@
         await invoke('set_force_cpu', { force: savedForceCpu }).catch(() => {});
         emit('sync-tray-freegpu', String(savedForceCpu));
       }
+
+      // Push hands-free settings to the backend now that we know it's
+      // up. The visuals were already applied in the toggle setup block;
+      // this just makes sure the Rust side has the same values for the
+      // next recording / wake-word listener spin-up.
+      try {
+        await invoke('set_auto_stop', { enabled: autoStopEnabled });
+        await invoke('set_auto_stop_secs', { secs: autoStopSecs });
+        await invoke('set_wake_word_threshold', { threshold: wakeWordThreshold });
+        await invoke('set_wake_word_phrase_id', { phraseId: wakeWordPhraseId });
+      } catch (_) {}
+
+      // Defer wake-word listener start until the whisper model is ready —
+      // the live pipeline needs the transcriber. The `model-ready` event
+      // listener handles that.
     }
 
     async function updateGpuStatus() {

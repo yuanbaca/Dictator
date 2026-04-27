@@ -1,6 +1,6 @@
 [package]
 name = "dictator"
-version = "0.5.0+8"
+version = "0.5.0"
 edition = "2024"
 default-run = "dictator"
 
@@ -59,6 +59,18 @@ cpal = "0.15"
 # ~15 MB to the distribution. Same `ort` major that the future Parakeet
 # integration will use, so the runtime cost is shared.
 voice_activity_detector = { version = "0.2", features = ["async"] }
+
+# Wake-word detection: OpenWakeWord ONNX pipeline (David Scripka).
+# Mel spectrogram → embedding → keyword classifier, all run via the
+# `ort` crate (already in our tree via the Silero VAD path). Pre-trained
+# models are bundled in the binary as `include_bytes!` from
+# `resources/openwakeword/` — no network, no per-user training. Replaced
+# rustpotter (which we tried first) because user-trained MFCC-DTW
+# detectors have a noise floor we couldn't tune past in real rooms.
+ort = "=2.0.0-rc.10"
+# ndarray is the tensor library `ort` uses internally; we need it
+# directly to construct input tensors with the right shapes.
+ndarray = "0.16"
 
 # Serialization for Tauri commands
 serde = { version = "1", features = ["derive"] }
