@@ -5,16 +5,39 @@ target/
 # Whisper models (large binary files)
 models/*.bin
 
+# Build artifacts / packaged distributions
+dist/
+*.exe
+*.dll
+*.zip
+*.pdb
+*.log
+panic.log
+
 # OS
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-# IDE
+# IDE / editor
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Environment
+# Local agent / Claude state
+.claude/
+
+# Environment / secrets (defense in depth — none should ever exist
+# in the tree, but this keeps a stray `.env` from getting committed
+# the moment one is created)
 .env
+.env.*
+!.env.example
+secrets.json
+credentials.json
+
+# Misc local fixtures / scratch files
+*.wav
+!apps/desktop/test_silence.wav
+greendictatorcap.png
