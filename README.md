@@ -4,6 +4,8 @@
 
 Voice-to-text for Windows — dictate from your computer with a hotkey, or from your phone as a wireless mic. Text appears wherever your cursor is. All processing happens locally on your machine. No cloud, no accounts, no data leaves your network.
 
+[**Download the latest release**](https://github.com/yuanbaca/Dictator-releases/releases/latest)
+
 ## Two Ways to Dictate
 
 ### From Your Computer (hotkey)
