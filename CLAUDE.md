@@ -46,12 +46,11 @@ Text insertion is the hardest constraint. Prove it first.
 - Rust code: use `thiserror` for error types, `tokio` for async, `serde` for serialization
 - TypeScript: strict mode, no `any` types
 - All WebSocket message types defined in `packages/shared-types`
-- Test insertion against the compatibility matrix in `docs/windows-injection.md`
 
 ## Key Documentation
 
-- `docs/plan.md` -- project plan and milestones
-- `docs/architecture.md` -- system architecture
-- `docs/windows-injection.md` -- text insertion strategies and testing matrix
-- `SECURITY.md` (root) -- actual shipping security model + reporting contact
-- `docs/phases/` -- phase-by-phase feature plans
+- `README.md` -- user-facing summary
+- `SECURITY.md` -- shipping security model + reporting contact
+- The `docs/` folder of internal planning / phase docs was removed before
+  the repo went public — anything still relevant lives in README, this
+  file, or in code comments.

@@ -132,9 +132,14 @@ The LLM is **optional** — it only downloads when you enable auto-format. Witho
 
 ## Uninstall
 
-Open **Settings** > scroll to bottom > click **Remove all app data**. This deletes all models, certificates, settings, and the autostart registry entry.
+Open **Settings** > scroll to bottom > click **Remove all app data**. This deletes all models, certificates, autostart registry entry, and stored preferences. After cleanup, close the app and delete the app folder.
 
-After cleanup, close the app and delete the app folder. See [docs/uninstall.md](docs/uninstall.md) for manual cleanup steps.
+If the app won't start and you need to clean up manually:
+
+- **App folder** — delete the folder containing `dictator.exe` (includes any `models/` subfolder)
+- **Autostart entry** (only if you turned on "Start on boot") — Task Manager → Startup → disable Dictator, or `reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Dictator /f`
+- **Tailscale certs** (only if Tailscale was detected) — delete `%TEMP%\dictator-certs\`
+- **Firewall rule** (only if Windows prompted you) — Windows Security → Firewall → Advanced settings → remove any "Dictator" inbound rules
 
 ## Built with AI assistance
 
