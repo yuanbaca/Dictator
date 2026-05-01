@@ -2,14 +2,14 @@
 
 ## Reporting a Vulnerability
 
-If you find a security issue in Dictator, please **do not** open a public GitHub issue. Instead, send a description to **yuanbaca@gmail.com** with:
+Open a [GitHub issue](https://github.com/yuanbaca/Dictator/issues/new) describing what you found. Include:
 
 - A clear description of the issue and the impact
 - Steps to reproduce
 - Affected version(s) (e.g. `0.5.0`)
 - Any logs, panics, or screenshots that would help
 
-I'll acknowledge receipt within a few days and aim to ship a fix in the next release.
+This is a single-maintainer hobby project, so I'm not running a private security inbox — public issues are fine and let other users see what's been reported. I'll get to it as I'm able and aim to ship fixes in the next release.
 
 ## Supported Versions
 
