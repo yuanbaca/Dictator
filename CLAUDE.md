@@ -18,7 +18,7 @@ A desktop dictation app: speak into your phone, text appears at the cursor on yo
 - **Mobile is a capture/control client only.** It captures audio and sends commands.
 - **Transcription is abstracted behind a provider interface.** Never hardcode to one engine.
 - **Text injection is abstracted behind an interface.** Support typing mode, paste mode, and auto mode with platform-specific backends.
-- **Transport protocol is documented in `docs/protocol.md`.** Follow it.
+- **Transport protocol lives in code** (`apps/desktop/src/server.rs`). The earlier `docs/protocol.md` design doc was removed — it described un-shipped pairing/token machinery and was misleading.
 
 ## Build Order (Critical)
 
@@ -52,7 +52,6 @@ Text insertion is the hardest constraint. Prove it first.
 
 - `docs/plan.md` -- project plan and milestones
 - `docs/architecture.md` -- system architecture
-- `docs/protocol.md` -- WebSocket protocol spec
 - `docs/windows-injection.md` -- text insertion strategies and testing matrix
-- `docs/security.md` -- security model and pairing flow
+- `SECURITY.md` (root) -- actual shipping security model + reporting contact
 - `docs/phases/` -- phase-by-phase feature plans
