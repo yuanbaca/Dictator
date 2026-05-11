@@ -226,26 +226,29 @@ pub struct WakeWordDetector {
 impl WakeWordDetector {
     /// Build a detector for the requested phrase.
     pub fn new(phrase: WakePhrase) -> Result<Self> {
-        let melspec_session = Session::builder()
-            .context("ort: SessionBuilder::new for melspec")?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .context("ort: optimization level for melspec")?
-            .commit_from_memory(MELSPEC_MODEL)
-            .context("ort: commit melspec model")?;
+        // Thread caps: these models are tiny (<2 MB each) and `ort`
+        // defaults to grabbing multiple intra-op and inter-op threads,
+        // which on a multi-core machine is what was driving the
+        // 35-ish-percent peak CPU during conversation. For models this
+        // small the parallelism overhead exceeds the inference savings,
+        // and OpenWakeWord's own upstream Python explicitly sets
+        // `intra_op_num_threads=1`. Match that.
+        let build_session = |bytes: &[u8], label: &str| -> Result<Session> {
+            Session::builder()
+                .with_context(|| format!("ort: SessionBuilder::new for {label}"))?
+                .with_optimization_level(GraphOptimizationLevel::Level3)
+                .with_context(|| format!("ort: optimization level for {label}"))?
+                .with_intra_threads(1)
+                .with_context(|| format!("ort: intra_threads for {label}"))?
+                .with_inter_threads(1)
+                .with_context(|| format!("ort: inter_threads for {label}"))?
+                .commit_from_memory(bytes)
+                .with_context(|| format!("ort: commit {label} model"))
+        };
 
-        let embedding_session = Session::builder()
-            .context("ort: SessionBuilder::new for embedding")?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .context("ort: optimization level for embedding")?
-            .commit_from_memory(EMBEDDING_MODEL)
-            .context("ort: commit embedding model")?;
-
-        let keyword_session = Session::builder()
-            .context("ort: SessionBuilder::new for keyword")?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .context("ort: optimization level for keyword")?
-            .commit_from_memory(phrase.model_bytes())
-            .context("ort: commit keyword model")?;
+        let melspec_session = build_session(MELSPEC_MODEL, "melspec")?;
+        let embedding_session = build_session(EMBEDDING_MODEL, "embedding")?;
+        let keyword_session = build_session(phrase.model_bytes(), "keyword")?;
 
         // Read the keyword model's expected number of embeddings from its
         // input shape. The Python upstream uses
