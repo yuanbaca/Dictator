@@ -172,6 +172,21 @@ const EMBEDDING_BUFFER_MAX: usize = 120;
 /// scores for the first few inferences.
 const INIT_SUPPRESS_PREDICTIONS: u32 = 5;
 
+/// RMS amplitude below which we treat a chunk as "silent" and skip the
+/// heavy ONNX inference entirely. ~-46 dBFS — quiet typing-room ambient
+/// usually sits above this; an actually-empty room sits well below. This
+/// is the single biggest idle-CPU savings: running 3 ONNX models 12.5×
+/// per second while the user isn't talking dominates Dictator's idle
+/// load.
+const SILENCE_RMS_THRESHOLD: f32 = 0.005;
+
+/// How many consecutive silent chunks we wait through before treating
+/// the next audible chunk as a "fresh resume" and re-arming the
+/// first-N-predictions-zero suppression. ~400 ms at 80 ms per chunk.
+/// Short enough that a normal "uh… hey jarvis" pause doesn't trigger
+/// suppression, long enough that a real silent stretch resets state.
+const SILENCE_RESET_CHUNKS: u32 = 5;
+
 /// Streaming detector. Push audio in any chunk size; pull scores out.
 pub struct WakeWordDetector {
     melspec_session: Session,
@@ -199,6 +214,13 @@ pub struct WakeWordDetector {
     /// How many keyword predictions we've produced. Used to suppress
     /// the first few (per OpenWakeWord's first-5-zero guard).
     predictions_made: u32,
+
+    /// Consecutive chunks we've classified as silent and skipped
+    /// inference on. When this crosses `SILENCE_RESET_CHUNKS` and the
+    /// next chunk is audible, we treat it as a "fresh resume" — the
+    /// detector's internal state is stale from before the quiet, so we
+    /// reset the prediction counter to re-arm the first-N-zero guard.
+    silent_chunks: u32,
 }
 
 impl WakeWordDetector {
@@ -266,6 +288,7 @@ impl WakeWordDetector {
             mel_buffer,
             embedding_buffer,
             predictions_made: 0,
+            silent_chunks: 0,
         })
     }
 
@@ -287,6 +310,25 @@ impl WakeWordDetector {
                 .collect();
             // Drop only `STEP_SAMPLES` — the trailing 480 stay for next tick.
             self.audio_buffer.drain(..STEP_SAMPLES);
+
+            // Silence gate. Compute RMS of the chunk; if essentially
+            // silent, skip the entire ONNX pipeline (3 model invocations,
+            // by far the heaviest thing this app does at idle). The mel
+            // and embedding buffers stay as they are — when audio
+            // resumes, they hold the last-known-good context.
+            let sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
+            let rms = (sum_sq / chunk.len() as f32).sqrt();
+            if rms < SILENCE_RMS_THRESHOLD {
+                self.silent_chunks = self.silent_chunks.saturating_add(1);
+                continue;
+            }
+            // Audio just resumed after a long silence — re-arm the
+            // first-N-zero suppression so a single mel/embedding edge
+            // from old buffer state can't fire as a spurious detection.
+            if self.silent_chunks >= SILENCE_RESET_CHUNKS {
+                self.predictions_made = 0;
+            }
+            self.silent_chunks = 0;
 
             let mel_frames = self.run_melspec(&chunk)?;
             for frame in mel_frames {
