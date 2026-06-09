@@ -4788,9 +4788,38 @@
         versionInfo.textContent = 'v' + ver + ' — checking…';
         const info = await invoke('check_for_updates');
         if (info.update_available) {
-          versionInfo.innerHTML = 'v' + info.current + ' — v' + info.latest + ' available! '
-            + '<button onclick="navigator.clipboard.writeText(\'' + info.url + '\').then(()=>{this.textContent=\'Copied!\'}).catch(()=>{})" '
-            + 'style="background:var(--accent);color:var(--bg);border:none;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">Copy link</button>';
+          // Build the row from real DOM nodes (instead of innerHTML +
+          // inline onclick) so we can route through Tauri invoke().
+          // `navigator.clipboard` is a no-op inside the Tauri WebView
+          // because the `tauri://` scheme isn't a "secure context",
+          // which is why the previous "Copy link" button silently did
+          // nothing.
+          versionInfo.textContent = '';
+          versionInfo.append('v' + info.current + ' — v' + info.latest + ' available! ');
+
+          const btnStyle = 'background:var(--accent);color:var(--bg);border:none;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:4px;';
+
+          const openBtn = document.createElement('button');
+          openBtn.textContent = 'Open';
+          openBtn.style.cssText = btnStyle;
+          openBtn.addEventListener('click', async () => {
+            try { await invoke('open_url', { url: info.url }); }
+            catch (e) { openBtn.textContent = 'Open failed'; }
+          });
+          versionInfo.appendChild(openBtn);
+
+          const copyBtn = document.createElement('button');
+          copyBtn.textContent = 'Copy link';
+          copyBtn.style.cssText = btnStyle + 'background:var(--bg-elev);color:var(--text);';
+          copyBtn.addEventListener('click', async () => {
+            try {
+              await invoke('copy_text_to_clipboard', { text: info.url });
+              copyBtn.textContent = 'Copied!';
+            } catch (e) {
+              copyBtn.textContent = 'Copy failed';
+            }
+          });
+          versionInfo.appendChild(copyBtn);
         } else if (info.latest) {
           versionInfo.textContent = 'v' + info.current + ' — up to date';
         } else {

@@ -1700,6 +1700,30 @@ fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Open an external URL in the user's default browser. Used by the
+/// "Open" button on the in-app update notification — the WebView's
+/// `window.open` and `<a target="_blank">` are no-ops because the
+/// runtime treats them as popups; routing through `cmd /C start "" url`
+/// is the most reliable way to hand off to the system shell on Windows.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    // Reject anything that doesn't look like a normal http(s) URL — the
+    // version-check command should only ever produce one, but this is
+    // belt-and-suspenders against a future caller trying to pass a
+    // shell-injection vector like `& start malicious.exe`.
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Only http(s) URLs are allowed".into());
+    }
+    if url.contains('"') || url.contains('\n') || url.contains('\r') {
+        return Err("URL contains disallowed characters".into());
+    }
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .spawn()
+        .map_err(|e| format!("Failed to open URL: {e}"))?;
+    Ok(())
+}
+
 fn parse_hotkey_preset(
     preset: &str,
 ) -> Option<tauri_plugin_global_shortcut::Shortcut> {
@@ -3136,6 +3160,7 @@ fn main() {
             get_copy_hotkey,
             set_copy_hotkey,
             copy_text_to_clipboard,
+            open_url,
             reformat_selection,
             speak_text,
             stop_speaking,
