@@ -28,6 +28,13 @@ Desktop.ini
 # Local agent / Claude state
 .claude/
 
+# Local agent-onboarding docs — kept private rather than published with
+# the source. AGENTS.md is the engineering wiki an AI agent reads to
+# get up to speed; DESIGN_BRIEF.md is the brief for visual-redesign
+# work. Both are intentionally NOT part of the public repo.
+AGENTS.md
+DESIGN_BRIEF.md
+
 # Environment / secrets (defense in depth — none should ever exist
 # in the tree, but this keeps a stray `.env` from getting committed
 # the moment one is created)
