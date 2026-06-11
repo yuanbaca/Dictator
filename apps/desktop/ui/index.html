@@ -13,20 +13,31 @@
   </script>
   <style>
     :root {
-      --bg: #1a1a2e;
-      --bg-card: #16213e;
-      --bg-hover: #2a2a4a;
-      --text: #eeeeee;
-      --text-dim: #999999;
-      --text-muted: #555555;
-      --accent: #4ecca3;
-      --accent-hover: #3db88f;
-      --accent-glow: rgba(78,204,163,0.15);
-      --danger: #e74c3c;
-      --danger-glow: rgba(231,76,60,0.2);
-      --warning: #f0a500;
-      --border: #333333;
-      --progress: #3498db;
+      --bg: #1f232b;
+      --bg-card: #282e38;
+      --bg-elev: #323944;
+      --bg-hover: #3a4350;
+      --bg-sunken: #191d24;
+      --text: #f1f3f6;
+      --text-dim: #b8c0ca;
+      --text-muted: #788391;
+      --accent: #5fa8ff;
+      --accent-hover: #7abbff;
+      --accent-ink: #081523;
+      --accent-glow: rgba(95,168,255,0.28);
+      --danger: #f06a4f;
+      --danger-glow: rgba(240,106,79,0.34);
+      --warning: #e8bf55;
+      --success: #65d39a;
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.15);
+      --progress: #5fa8ff;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+      --r-sm: 6px;
+      --r-md: 8px;
+      --r-lg: 12px;
+      --r-xl: 16px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1024,20 +1035,975 @@
     #setupOverlay.visible {
       display: flex;
     }
+
+    /* Direction A redesign layer. Keep the existing DOM IDs intact; this
+       block changes the shipped vanilla UI to match the new prototype. */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--bg-hover) transparent;
+    }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--bg-hover);
+      border: 3px solid transparent;
+      border-radius: 999px;
+      background-clip: padding-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-width: 360px;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      font-feature-settings: "ss01", "cv11";
+      -webkit-font-smoothing: antialiased;
+      background:
+        radial-gradient(circle at 50% -140px, var(--accent-glow), transparent 360px),
+        linear-gradient(180deg, color-mix(in oklab, var(--bg), white 3%), var(--bg) 34%);
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 18px 10px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, color-mix(in oklab, var(--bg), white 4%), var(--bg));
+      flex-shrink: 0;
+    }
+
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.98), color-mix(in oklab, var(--accent), white 82%));
+      border: 1px solid color-mix(in oklab, var(--accent) 46%, var(--border));
+      box-shadow: 0 8px 22px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.55);
+    }
+
+    .brand-mark .logo-circle {
+      width: 25px !important;
+      height: 25px !important;
+      margin: 0 !important;
+      border: 0;
+      border-radius: 5px;
+      filter: saturate(1.08) contrast(1.03);
+      mix-blend-mode: normal;
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .header h1 {
+      font-size: 15px;
+      line-height: 1.1;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .header .subtitle {
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 220px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .status-bar {
+      justify-content: flex-start;
+      gap: 7px;
+      padding: 5px 10px 5px 8px;
+      min-width: 0;
+      max-width: 230px;
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg-elev);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+      font-size: 11.5px;
+      font-weight: 550;
+      color: var(--text-dim);
+    }
+
+    #statusText {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      box-shadow: 0 0 0 3px color-mix(in oklab, currentColor 14%, transparent);
+    }
+
+    .status-dot.loading { background: var(--warning); color: var(--warning); }
+    .status-dot.ready { background: var(--success); color: var(--success); }
+    .status-dot.recording { background: var(--danger); color: var(--danger); }
+    .status-dot.transcribing { background: var(--accent); color: var(--accent); }
+
+    .rec-timer {
+      margin-left: 2px;
+      padding-left: 7px;
+      border-left: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0;
+    }
+
+    .settings-btn {
+      position: static;
+      width: 32px;
+      height: 32px;
+      flex-shrink: 0;
+      border-radius: var(--r-md);
+      border-color: var(--border);
+      background: var(--bg-card);
+      color: var(--text-dim);
+      font-size: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+
+    .settings-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+    }
+
+    .settings-btn:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+      color: var(--text);
+      background: color-mix(in oklab, var(--accent) 9%, var(--bg-card));
+    }
+
+    .progress-bar {
+      height: 2px;
+      background: transparent;
+      flex-shrink: 0;
+    }
+
+    .progress-bar .fill {
+      background: linear-gradient(90deg, var(--accent), var(--progress));
+      box-shadow: 0 0 12px var(--accent-glow);
+      border-radius: 0;
+    }
+
+    .main-area {
+      justify-content: flex-start;
+      padding: 18px 18px 10px;
+      gap: 12px;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .mic-button {
+      width: 168px;
+      height: 168px;
+      border: 0;
+      background: transparent;
+      isolation: isolate;
+      flex: 0 0 auto;
+      filter: none;
+    }
+
+    .mic-button::before,
+    .mic-button::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+
+    .mic-button::before {
+      inset: -14px;
+      z-index: -2;
+      background: radial-gradient(circle, var(--accent-glow) 0%, transparent 68%);
+      filter: blur(8px);
+      animation: dict-ambient 3.4s ease-in-out infinite;
+    }
+
+    .mic-button::after {
+      z-index: -1;
+      border: 1.5px solid var(--accent);
+      opacity: 0.42;
+    }
+
+    .mic-button:hover:not(.disabled) {
+      transform: translateY(-1px) scale(1.015);
+      filter: none;
+    }
+
+    .mic-button:active:not(.disabled) {
+      transform: scale(0.98);
+    }
+
+    .mic-button.recording {
+      animation: none;
+      transform: none;
+    }
+
+    .mic-button.recording::before {
+      background: radial-gradient(circle, var(--danger-glow) 0%, transparent 68%);
+      animation: dict-rec-pulse 1.2s ease-in-out infinite;
+    }
+
+    .mic-button.recording::after {
+      border-color: var(--danger);
+      border-top-color: transparent;
+      border-right-color: var(--danger);
+      border-bottom-color: var(--danger);
+      opacity: 0.82;
+      animation: dict-rec-ring 1.7s linear infinite;
+    }
+
+    .mic-button.disabled {
+      opacity: 0.62;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .mic-button.disabled::before {
+      opacity: 0.3;
+      animation: none;
+    }
+
+    body[data-state="transcribing"] .mic-button::after,
+    .mic-button.disabled:not(.recording)::after {
+      border-top-color: var(--accent);
+      border-right-color: transparent;
+      animation: dict-rec-ring 1s linear infinite;
+    }
+
+    .mic-core {
+      width: 132px;
+      height: 132px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      position: relative;
+      z-index: 1;
+      background:
+        radial-gradient(circle at 32% 24%, color-mix(in oklab, var(--accent), white 24%), var(--accent));
+      box-shadow:
+        0 20px 46px var(--accent-glow),
+        inset 0 2px 5px rgba(255,255,255,0.28),
+        inset 0 -4px 12px rgba(0,0,0,0.24);
+      color: var(--accent-ink);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+
+    .mic-button.recording .mic-core {
+      background:
+        radial-gradient(circle at 32% 24%, color-mix(in oklab, var(--danger), white 24%), var(--danger));
+      box-shadow:
+        0 20px 46px var(--danger-glow),
+        inset 0 2px 5px rgba(255,255,255,0.22),
+        inset 0 -4px 12px rgba(0,0,0,0.26);
+    }
+
+    .mic-icon {
+      width: 48px;
+      height: 48px;
+      color: currentColor;
+      line-height: 1;
+    }
+
+    .mic-hint {
+      margin-top: 0;
+      min-height: 18px;
+      font-size: 12.5px;
+      font-weight: 550;
+      color: var(--text-dim);
+    }
+
+    .transcript-area,
+    .format-bar,
+    .action-buttons,
+    .history-panel,
+    .hint-msg,
+    .error-msg,
+    .recording-tip {
+      max-width: 484px;
+      flex-shrink: 0;
+    }
+
+    .transcript-area {
+      min-height: 112px;
+      max-height: 168px;
+      border-radius: var(--r-md);
+      padding: 34px 14px 14px;
+      background: color-mix(in oklab, var(--bg-card) 92%, black 8%);
+      border-color: var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+      line-height: 1.55;
+      font-size: 13.5px;
+      text-align: left;
+      position: relative;
+    }
+
+    .transcript-area::before {
+      content: 'Transcript';
+      position: absolute;
+      top: 12px;
+      left: 14px;
+      right: 14px;
+      color: var(--text-muted);
+      font-size: 10.5px;
+      font-weight: 750;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      pointer-events: none;
+    }
+
+    .transcript-area.empty {
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .transcript-area.preview {
+      color: var(--text-dim);
+      border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+      background:
+        linear-gradient(180deg, color-mix(in oklab, var(--accent) 5%, transparent), transparent 55%),
+        var(--bg-card);
+    }
+
+    .transcript-area.live {
+      max-height: 220px;
+      border-color: color-mix(in oklab, var(--danger) 60%, var(--border));
+    }
+
+    .transcript-area.live::before {
+      content: 'Live preview';
+      color: var(--danger);
+    }
+
+    .format-bar {
+      gap: 8px;
+    }
+
+    select,
+    input[type="text"],
+    input[type="password"],
+    textarea,
+    .format-bar select,
+    .setting-item select,
+    .setting-group select,
+    .setting-row select {
+      background: var(--bg-elev) !important;
+      color: var(--text) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: var(--r-sm) !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    select:hover,
+    input[type="text"]:hover,
+    input[type="password"]:hover,
+    textarea:hover {
+      border-color: var(--border-strong) !important;
+    }
+
+    input[type="range"] {
+      height: 18px;
+      accent-color: var(--accent);
+    }
+
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 4px;
+      border-radius: 999px;
+      background: var(--bg-elev);
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      margin-top: -5px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      background: var(--text);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.34);
+    }
+
+    .format-btn,
+    .action-btn,
+    .history-entry-btn,
+    .history-clear-all,
+    #wordBankAdd,
+    #retryGpuBtn,
+    #templateSaveBtn,
+    #templateResetBtn,
+    #minimaxTestBtn,
+    #uninstallBtn {
+      border-radius: var(--r-sm) !important;
+      font-weight: 650;
+    }
+
+    .format-btn {
+      padding: 9px 13px;
+      background: var(--bg-card);
+      border-color: var(--border);
+      color: var(--text-dim);
+    }
+
+    .action-buttons {
+      gap: 8px;
+    }
+
+    .action-btn {
+      min-height: 42px;
+      font-size: 13px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+
+    .btn-inject {
+      color: var(--accent-ink);
+      background: linear-gradient(180deg, color-mix(in oklab, var(--accent), white 10%), var(--accent));
+      box-shadow: 0 8px 24px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.3);
+    }
+
+    .btn-clear {
+      flex: 0.45;
+      color: var(--text-dim);
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+    }
+
+    .history-panel {
+      margin-top: 2px;
+      border-radius: var(--r-md);
+      background: color-mix(in oklab, var(--bg-card) 94%, black 6%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .history-toggle {
+      padding: 9px 12px;
+      font-size: 11.5px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 750;
+    }
+
+    .history-entry {
+      padding: 10px 12px;
+    }
+
+    .history-entry:hover {
+      background: color-mix(in oklab, var(--bg-elev) 58%, transparent);
+    }
+
+    .history-entry-text {
+      font-size: 12.5px;
+    }
+
+    .hint-msg,
+    .error-msg,
+    .recording-tip {
+      border-radius: var(--r-md);
+      font-size: 12px;
+      line-height: 1.45;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .hint-msg {
+      border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
+      background: color-mix(in oklab, var(--accent) 12%, var(--bg-card));
+      color: var(--text-dim);
+    }
+
+    .error-msg {
+      border-color: color-mix(in oklab, var(--danger) 55%, var(--border));
+      background: color-mix(in oklab, var(--danger) 14%, var(--bg-card));
+      color: var(--danger);
+    }
+
+    .idle-toast {
+      background: color-mix(in oklab, var(--bg-card) 94%, black 18%);
+      border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+      box-shadow: 0 18px 48px rgba(0,0,0,0.38);
+    }
+
+    .info-bar {
+      padding: 8px 18px 10px;
+      border-top: 1px solid var(--border);
+      background: color-mix(in oklab, var(--bg) 92%, black 8%);
+      flex-shrink: 0;
+      max-height: 232px;
+      overflow: hidden;
+    }
+
+    .info-bar.collapsed {
+      max-height: 54px;
+    }
+
+    .info-bar.collapsed .phone-connect {
+      display: none;
+    }
+
+    .utility-toggle {
+      width: 100%;
+      min-height: 36px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+      text-align: left;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .utility-toggle:hover {
+      border-color: var(--border-strong);
+      background: color-mix(in oklab, var(--bg-card), white 3%);
+    }
+
+    .utility-title {
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+
+    .utility-summary {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+
+    .utility-chevron {
+      width: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      background: var(--bg-elev);
+      color: var(--text-dim);
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .phone-connect {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      padding: 9px;
+      margin-top: 8px;
+      max-height: 164px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--bg-card);
+      text-align: left;
+    }
+
+    .phone-connect > div:first-child,
+    #certHelp,
+    #phoneStatus,
+    #gpuStatus,
+    #gpuFreeRow {
+      grid-column: 1 / -1;
+    }
+
+    .url-option {
+      grid-column: 1 / -1;
+      margin: 0;
+      padding: 7px 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      background: var(--bg-elev);
+    }
+
+    .url-label {
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 750;
+      font-size: 9.5px;
+      color: var(--text-muted);
+    }
+
+    .url-value {
+      margin-top: 3px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    .cert-badge {
+      border-radius: 999px;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+    }
+
+    .cert-badge.tailscale { color: var(--accent-ink); }
+    .cert-badge.self-signed { color: color-mix(in oklab, var(--warning), black 70%); }
+
+    .gpu-free-row {
+      border-radius: var(--r-sm);
+      background: var(--bg-elev);
+      margin-top: 6px;
+    }
+
+    .gpu-free-row.active {
+      border-color: color-mix(in oklab, var(--accent) 58%, var(--border));
+      background: color-mix(in oklab, var(--accent) 12%, var(--bg-elev));
+    }
+
+    .gpu-free-icon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 750;
+      color: var(--accent);
+      background: color-mix(in oklab, var(--accent) 13%, var(--bg-card));
+      border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--border));
+    }
+
+    .modal-overlay {
+      align-items: stretch;
+      justify-content: flex-end;
+      background: rgba(0,0,0,0.46);
+      backdrop-filter: blur(7px);
+    }
+
+    .modal {
+      width: min(438px, 92vw);
+      max-width: none;
+      max-height: none;
+      height: 100vh;
+      border-width: 0 0 0 1px;
+      border-radius: 0;
+      background: color-mix(in oklab, var(--bg), black 8%);
+      box-shadow: -24px 0 60px rgba(0,0,0,0.42);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 15px 18px;
+      flex-shrink: 0;
+      background: color-mix(in oklab, var(--bg), white 3%);
+    }
+
+    .modal-header h2 {
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .modal-close {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border-radius: var(--r-sm);
+      background: var(--bg-elev);
+      color: var(--text-dim);
+    }
+
+    .modal-body {
+      padding: 14px 16px 18px;
+      overflow-y: auto;
+    }
+
+    .settings-section {
+      padding: 4px 16px 10px;
+      border-radius: var(--r-lg);
+      background: var(--bg-card);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .settings-section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 0 8px;
+      border-bottom: 0;
+      color: var(--text-dim);
+      font-size: 10.5px;
+      letter-spacing: 0.1em;
+    }
+
+    .settings-section-header::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    .setting-item {
+      padding: 11px 0;
+      border-color: var(--border);
+    }
+
+    .setting-item-row > label,
+    .setting-item-label {
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+
+    .setting-item-hint {
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+
+    .toggle {
+      width: 34px;
+      height: 20px;
+      border-radius: 999px;
+      padding: 2px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .toggle::after {
+      top: 3px;
+      left: 3px;
+      width: 12px;
+      height: 12px;
+      background: var(--text-dim);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.36);
+    }
+
+    .toggle.on {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .toggle.on::after {
+      left: 17px;
+      background: var(--accent-ink);
+    }
+
+    .wake-score-card {
+      position: relative;
+      margin-top: 10px !important;
+      min-height: 92px !important;
+      padding: 12px 12px 12px 88px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--bg-elev);
+      overflow: hidden;
+    }
+
+    .wake-score-card::before {
+      content: '';
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      background:
+        conic-gradient(from 135deg, var(--accent) var(--wake-score-deg, 0deg), var(--bg-card) 0 270deg, transparent 0),
+        radial-gradient(circle at center, var(--bg-elev) 53%, transparent 55%);
+      filter: drop-shadow(0 0 8px var(--accent-glow));
+    }
+
+    .wake-score-card::after {
+      content: attr(data-score-label);
+      position: absolute;
+      left: 14px;
+      top: 34px;
+      width: 58px;
+      text-align: center;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .wake-score-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--text-dim);
+      font-size: 10.5px;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .wake-score-title strong {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .wake-score-track {
+      margin-top: 9px;
+      height: 6px;
+      background: var(--bg-card);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .wake-score-track > div {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--warning));
+      border-radius: inherit;
+      transition: width 120ms linear;
+    }
+
+    .wake-score-meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-muted);
+    }
+
+    #setupOverlay {
+      background:
+        radial-gradient(circle at 50% 70px, var(--accent-glow), transparent 340px),
+        var(--bg);
+      justify-content: center;
+      padding: 28px;
+    }
+
+    #setupOverlay > div {
+      max-width: 420px !important;
+      padding: 28px 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-xl);
+      background: var(--bg-card);
+      box-shadow: 0 24px 70px rgba(0,0,0,0.32);
+    }
+
+    @keyframes dict-ambient {
+      0%, 100% { opacity: 0.62; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.04); }
+    }
+
+    @keyframes dict-rec-pulse {
+      0%, 100% { transform: scale(1); opacity: 0.82; }
+      50% { transform: scale(1.08); opacity: 1; }
+    }
+
+    @keyframes dict-rec-ring {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 470px) {
+      .header {
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+
+      .header .subtitle {
+        display: none;
+      }
+
+      .status-bar {
+        max-width: 170px;
+      }
+
+      .phone-connect {
+        grid-template-columns: 1fr;
+      }
+
+      .url-option {
+        grid-column: 1 / -1;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <img src="dictatorhat.png" alt="Dictator" class="logo-circle" style="width:48px; height:48px; margin-bottom:4px;">
-    <h1>Dictator</h1>
-    <div class="subtitle">What you say goes... (to your cursor)</div>
-    <button class="settings-btn" id="settingsBtn" title="Settings">&#x22EE;</button>
-  </div>
-
-  <div class="status-bar">
-    <div class="status-dot" id="statusDot"></div>
-    <span id="statusText">Starting...</span>
-    <span class="rec-timer" id="recTimer"></span>
+    <div class="brand-lockup">
+      <div class="brand-mark">
+        <img src="dictatorhat.png" alt="Dictator" class="logo-circle" style="width:48px; height:48px; margin-bottom:4px;">
+      </div>
+      <div class="brand-copy">
+        <h1>Dictator</h1>
+        <div class="subtitle">What you say goes... to your cursor</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="status-bar">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Starting...</span>
+        <span class="rec-timer" id="recTimer"></span>
+      </div>
+      <button class="settings-btn" id="settingsBtn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" stroke-width="1.7"></circle>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" stroke-width="1.35" stroke-linejoin="round"></path>
+        </svg>
+      </button>
+    </div>
   </div>
 
   <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
@@ -1063,7 +2029,12 @@
 
   <div class="main-area">
     <button class="mic-button disabled" id="micBtn" title="Click to record">
-      <span class="mic-icon">&#x1F399;</span>
+      <span class="mic-core">
+        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="12" rx="3" fill="currentColor"></rect>
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+      </span>
     </button>
     <div class="mic-hint" id="micHint">Loading model...</div>
 
@@ -1116,7 +2087,12 @@
     </div>
   </div>
 
-  <div class="info-bar">
+  <div class="info-bar collapsed" id="utilityPanel">
+    <button class="utility-toggle" id="utilityPanelToggle" type="button" aria-expanded="false" aria-controls="phoneConnect">
+      <span class="utility-title">Phone &amp; GPU</span>
+      <span class="utility-summary" id="utilityPanelSummary">No phone connected · GPU loading</span>
+      <span class="utility-chevron" id="utilityPanelChevron" aria-hidden="true">▼</span>
+    </button>
     <div class="phone-connect" id="phoneConnect">
       <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">
         Open on your phone:
@@ -1142,7 +2118,7 @@
            opening Settings. Mirrors the Force CPU setting. -->
       <div class="gpu-free-row" id="gpuFreeRow">
         <div class="gpu-free-label">
-          <span class="gpu-free-icon" aria-hidden="true">&#x1F3AE;</span>
+          <span class="gpu-free-icon" aria-hidden="true">GPU</span>
           <div class="gpu-free-text">
             <div class="gpu-free-title">Free GPU</div>
             <div class="gpu-free-sub">Frees up resources on your graphics card so games or other apps can use it. Toggle off when you're done.</div>
@@ -1250,11 +2226,18 @@
                 0.5 is the default. Push higher (0.6–0.7) if you get false positives.
               </div>
               <div id="wakeWordStatus" style="margin-top:6px; color:var(--text-muted); font-size:11px; min-height:14px;"></div>
-              <div id="wakeWordScoreRow" style="margin-top:2px; color:var(--text-muted); font-size:11px; min-height:14px; display:none;">
-                <span>Live score: </span><span id="wakeWordScoreValue" style="font-variant-numeric: tabular-nums;">0.00</span>
-                <span> / target </span><span id="wakeWordScoreTarget" style="font-variant-numeric: tabular-nums;">0.50</span>
-                <div style="margin-top:4px; height:4px; background:var(--border); border-radius:2px; overflow:hidden;">
-                  <div id="wakeWordScoreBar" style="height:100%; width:0%; background:var(--accent); transition:width 120ms linear;"></div>
+              <div id="wakeWordScoreRow" class="wake-score-card" data-score-label="0.00" style="display:none; --wake-score:0; --wake-threshold:0.50;">
+                <div class="wake-score-title">
+                  <span>Wake-word confidence</span>
+                  <strong><span id="wakeWordScoreValue">0.00</span> / <span id="wakeWordScoreTarget">0.50</span></strong>
+                </div>
+                <div class="wake-score-track">
+                  <div id="wakeWordScoreBar"></div>
+                </div>
+                <div class="wake-score-meta">
+                  <span>0.00</span>
+                  <span>Target</span>
+                  <span>1.00</span>
                 </div>
               </div>
             </div>
@@ -1745,19 +2728,19 @@
     const THEMES = {
       'dictator-dark': {
         name: 'Dictator Dark',
-        bg: '#1a1a2e', bgCard: '#16213e', bgHover: '#2a2a4a',
-        text: '#eeeeee', textDim: '#999999', textMuted: '#555555',
-        accent: '#4ecca3', accentHover: '#3db88f', accentGlow: 'rgba(78,204,163,.15)',
-        danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.2)',
-        warning: '#f0a500', border: '#333333', progress: '#3498db'
+        bg: '#1f232b', bgCard: '#282e38', bgElev: '#323944', bgHover: '#3a4350', bgSunken: '#191d24',
+        text: '#f1f3f6', textDim: '#b8c0ca', textMuted: '#788391',
+        accent: '#5fa8ff', accentHover: '#7abbff', accentInk: '#081523', accentGlow: 'rgba(95,168,255,.28)',
+        danger: '#f06a4f', dangerGlow: 'rgba(240,106,79,.34)',
+        warning: '#e8bf55', success: '#65d39a', border: 'rgba(255,255,255,.08)', borderStrong: 'rgba(255,255,255,.15)', progress: '#5fa8ff'
       },
       'dictator-light': {
         name: 'Dictator Light',
-        bg: '#f0f2f5', bgCard: '#ffffff', bgHover: '#e4e6e9',
-        text: '#1a1a2e', textDim: '#666666', textMuted: '#aaaaaa',
-        accent: '#4ecca3', accentHover: '#3db88f', accentGlow: 'rgba(78,204,163,.12)',
-        danger: '#e74c3c', dangerGlow: 'rgba(231,76,60,.12)',
-        warning: '#d48a00', border: '#d0d0d0', progress: '#3498db'
+        bg: '#f7f8fb', bgCard: '#ffffff', bgElev: '#edf1f6', bgHover: '#e3e8ef', bgSunken: '#eef2f7',
+        text: '#202633', textDim: '#536070', textMuted: '#7d8897',
+        accent: '#2d72df', accentHover: '#205ec2', accentInk: '#ffffff', accentGlow: 'rgba(45,114,223,.18)',
+        danger: '#c9442f', dangerGlow: 'rgba(201,68,47,.16)',
+        warning: '#b67617', success: '#188f5e', border: 'rgba(32,38,51,.11)', borderStrong: 'rgba(32,38,51,.18)', progress: '#2d72df'
       },
       'mint-dark': {
         name: 'Mint Dark',
@@ -1911,17 +2894,22 @@
       const s = document.documentElement.style;
       s.setProperty('--bg', t.bg);
       s.setProperty('--bg-card', t.bgCard);
+      s.setProperty('--bg-elev', t.bgElev || t.bgHover || t.bgCard);
       s.setProperty('--bg-hover', t.bgHover);
+      s.setProperty('--bg-sunken', t.bgSunken || t.bg);
       s.setProperty('--text', t.text);
       s.setProperty('--text-dim', t.textDim);
       s.setProperty('--text-muted', t.textMuted);
       s.setProperty('--accent', t.accent);
       s.setProperty('--accent-hover', t.accentHover);
+      s.setProperty('--accent-ink', t.accentInk || t.bg);
       s.setProperty('--accent-glow', t.accentGlow);
       s.setProperty('--danger', t.danger);
       s.setProperty('--danger-glow', t.dangerGlow);
       s.setProperty('--warning', t.warning);
+      s.setProperty('--success', t.success || t.accent);
       s.setProperty('--border', t.border);
+      s.setProperty('--border-strong', t.borderStrong || t.border);
       s.setProperty('--progress', t.progress);
       localStorage.setItem('dictator-theme', id);
       themeSelect.value = id;
@@ -2084,6 +3072,7 @@
     wakeWordThresholdSlider.value = String(wakeWordThreshold);
     wakeWordThresholdLabel.textContent = wakeWordThreshold.toFixed(2);
     wakeWordScoreTarget.textContent = wakeWordThreshold.toFixed(2);
+    wakeWordScoreRow.style.setProperty('--wake-threshold', String(wakeWordThreshold));
 
     // Populate the phrase dropdown from the backend's list. Doing this
     // async means the dropdown is empty for a tick on launch — fine since
@@ -2122,12 +3111,17 @@
       wakeWordScoreValue.textContent = score.toFixed(2);
       const pct = Math.max(0, Math.min(100, (score / wakeWordThreshold) * 100));
       wakeWordScoreBar.style.width = pct + '%';
+      wakeWordScoreRow.style.setProperty('--wake-score', String(Math.max(0, Math.min(1, score))));
+      wakeWordScoreRow.style.setProperty('--wake-score-deg', (Math.max(0, Math.min(1, score)) * 270).toFixed(1) + 'deg');
+      wakeWordScoreRow.setAttribute('data-score-label', score.toFixed(2));
     });
     listen('wake-word-threshold', (event) => {
       // Backend might have clamped the slider value — reflect what it
       // actually used.
       const t = typeof event.payload === 'number' ? event.payload : wakeWordThreshold;
+      wakeWordThreshold = t;
       wakeWordScoreTarget.textContent = t.toFixed(2);
+      wakeWordScoreRow.style.setProperty('--wake-threshold', String(Math.max(0, Math.min(1, t))));
     });
 
     function applyWakeWordVisuals() {
@@ -2149,6 +3143,10 @@
         wakeWordScoreRow.style.display = 'block';
         wakeWordScoreValue.textContent = '0.00';
         wakeWordScoreBar.style.width = '0%';
+        wakeWordScoreRow.style.setProperty('--wake-score', '0');
+        wakeWordScoreRow.style.setProperty('--wake-score-deg', '0deg');
+        wakeWordScoreRow.style.setProperty('--wake-threshold', String(wakeWordThreshold));
+        wakeWordScoreRow.setAttribute('data-score-label', '0.00');
       } catch (e) {
         setWakeWordStatus('Listener error: ' + e);
         wakeWordScoreRow.style.display = 'none';
@@ -2623,6 +3621,7 @@
     function setStatus(state, text) {
       statusDot.className = 'status-dot ' + state;
       statusText.textContent = text;
+      document.body.dataset.state = state;
     }
 
     function showHint(msg) {
@@ -4502,6 +5501,38 @@
     const tailscaleUrlEl = document.getElementById('tailscaleUrl');
     const phoneStatusEl = document.getElementById('phoneStatus');
     const certHelp = document.getElementById('certHelp');
+    const utilityPanel = document.getElementById('utilityPanel');
+    const utilityPanelToggle = document.getElementById('utilityPanelToggle');
+    const utilityPanelSummary = document.getElementById('utilityPanelSummary');
+    const utilityPanelChevron = document.getElementById('utilityPanelChevron');
+    let utilityPanelCollapsed = localStorage.getItem('dictator-utility-panel-collapsed') !== '0';
+
+    function compactUtilityText(text, fallback) {
+      const value = (text || '').replace(/\s+/g, ' ').trim() || fallback;
+      return value.length > 38 ? value.slice(0, 35) + '...' : value;
+    }
+
+    function updateUtilityPanelSummary() {
+      const gpuEl = document.getElementById('gpuStatus');
+      const phone = compactUtilityText(phoneStatusEl.textContent, 'No phone connected');
+      const gpu = compactUtilityText(gpuEl ? gpuEl.textContent : '', 'GPU loading');
+      utilityPanelSummary.textContent = phone + ' · ' + gpu;
+    }
+
+    function applyUtilityPanelCollapse() {
+      utilityPanel.classList.toggle('collapsed', utilityPanelCollapsed);
+      utilityPanelToggle.setAttribute('aria-expanded', utilityPanelCollapsed ? 'false' : 'true');
+      utilityPanelChevron.textContent = utilityPanelCollapsed ? '▼' : '▲';
+      localStorage.setItem('dictator-utility-panel-collapsed', utilityPanelCollapsed ? '1' : '0');
+    }
+
+    utilityPanelToggle.addEventListener('click', () => {
+      utilityPanelCollapsed = !utilityPanelCollapsed;
+      applyUtilityPanelCollapse();
+    });
+
+    applyUtilityPanelCollapse();
+    updateUtilityPanelSummary();
 
     async function loadServerInfo() {
       try {
@@ -4510,6 +5541,7 @@
       } catch (e) {
         lanUrlEl.textContent = 'Not available';
       }
+      updateUtilityPanelSummary();
 
       // Default cert help — updated dynamically when Tailscale is enabled
       certHelp.innerHTML = 'Your phone will show a security warning.<br>Tap <b>Show Details</b> → <b>visit this website</b> to proceed.';
@@ -4728,6 +5760,7 @@
         gpuEl.textContent = 'Loading model...';
         gpuEl.className = 'info-text muted';
       }
+      updateUtilityPanelSummary();
     }
 
     // "Try GPU Again" — clears the crash-skip flag, unloads models, and kicks
@@ -4774,6 +5807,7 @@
           phoneStatusEl.textContent = 'No phone connected';
           phoneStatusEl.className = 'info-text muted';
         }
+        updateUtilityPanelSummary();
       } catch (e) { /* ignore */ }
     }
 
